@@ -1,0 +1,10 @@
+{
+  "name": "portfolio-manager",
+  "private": true,
+  "workspaces": [
+    "desktop"
+  ],
+  "scripts": {
+    "prepare": "husky"
+  }
+}

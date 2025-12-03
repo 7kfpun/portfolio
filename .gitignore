@@ -1,0 +1,33 @@
+# Data directory containing API keys and sensitive data
+desktop/src-tauri/data/
+desktop/imported_data/
+
+# Dependencies
+node_modules/
+desktop/node_modules/
+
+# Build outputs
+desktop/dist/
+desktop/dist-ssr/
+desktop/src-tauri/target/
+
+# Logs
+*.log
+npm-debug.log*
+desktop/src-tauri/*.log
+
+# Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+.env.production
