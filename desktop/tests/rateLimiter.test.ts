@@ -6,7 +6,7 @@ describe('RateLimiter', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
 
-    const limiter = new RateLimiter(60); // 1 request/sec
+    const limiter = new RateLimiter(60); // 1 request/sec baseline
     const timestamps: number[] = [];
 
     const first = limiter.schedule(async () => {
@@ -31,7 +31,7 @@ describe('RateLimiter', () => {
     expect(results[1].status).toBe('rejected');
     expect(results[2].status).toBe('fulfilled');
     expect(timestamps[1] - timestamps[0]).toBeGreaterThanOrEqual(1000);
-    expect(timestamps[2] - timestamps[1]).toBeGreaterThanOrEqual(1000);
+    expect(timestamps[2] - timestamps[1]).toBeGreaterThanOrEqual(2000);
 
     vi.useRealTimers();
   });

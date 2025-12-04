@@ -1,11 +1,8 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { PriceRecord } from '../types/PriceData';
-import { parseNumber, parseCSV, toCSV } from '../utils/csvUtils';
+import { parseNumber, parseCSV } from '../utils/csvUtils';
 
-const PRICES_CSV = 'prices.csv';
-
-interface PriceCSVRow {
-  symbol: string;
+interface PriceFileRow {
   date: string;
   close: string;
   open?: string;
@@ -16,27 +13,33 @@ interface PriceCSVRow {
   updated_at?: string;
 }
 
+const PRICE_FILE_HEADER = 'date,close,open,high,low,volume,source,updated_at';
+
 export class PriceDataService {
-  private parsePriceCSV(csvContent: string): PriceRecord[] {
-    const rows = parseCSV<PriceCSVRow>(csvContent);
+  private parsePriceFile(symbol: string, csvContent: string): PriceRecord[] {
+    if (!csvContent || !csvContent.trim()) {
+      return [];
+    }
+
+    const rows = parseCSV<PriceFileRow>(csvContent);
     const records: PriceRecord[] = [];
 
     for (const row of rows) {
       const parsedClose = parseNumber(row.close);
 
-      if (!row.symbol || !row.date || parsedClose === undefined) {
+      if (!row.date || parsedClose === undefined) {
         continue;
       }
 
       records.push({
-        symbol: row.symbol,
+        symbol,
         date: row.date,
         close: parsedClose,
         open: parseNumber(row.open),
         high: parseNumber(row.high),
         low: parseNumber(row.low),
         volume: parseNumber(row.volume),
-        source: (row.source as PriceRecord['source']) || 'twelve_data',
+        source: (row.source as PriceRecord['source']) || 'yahoo_finance',
         updated_at: row.updated_at || new Date().toISOString(),
       });
     }
@@ -44,24 +47,46 @@ export class PriceDataService {
     return records;
   }
 
-  private toPriceCSV(records: PriceRecord[]): string {
-    return toCSV(records, [
-      'symbol',
-      'date',
-      'close',
-      'open',
-      'high',
-      'low',
-      'volume',
-      'source',
-      'updated_at',
-    ]);
+  private async readSymbolPrices(symbol: string): Promise<PriceRecord[]> {
+    try {
+      const content = await invoke<string>('read_price_file', { symbol });
+      return this.parsePriceFile(symbol, content);
+    } catch (error) {
+      console.error(`Failed to read price file for ${symbol}:`, error);
+      return [];
+    }
+  }
+
+  private buildFileContent(records: PriceRecord[]): string {
+    const lines = [PRICE_FILE_HEADER];
+    for (const record of records) {
+      lines.push(
+        [
+          record.date,
+          record.close,
+          record.open ?? '',
+          record.high ?? '',
+          record.low ?? '',
+          record.volume ?? '',
+          record.source,
+          record.updated_at,
+        ].join(',')
+      );
+    }
+    return lines.join('\n') + '\n';
   }
 
   async loadAllPrices(): Promise<PriceRecord[]> {
     try {
-      const content = await invoke<string>('read_data_csv', { filename: PRICES_CSV });
-      return this.parsePriceCSV(content);
+      const symbols = await invoke<string[]>('list_price_files');
+      const allRecords: PriceRecord[] = [];
+
+      for (const symbol of symbols) {
+        const symbolRecords = await this.readSymbolPrices(symbol);
+        allRecords.push(...symbolRecords);
+      }
+
+      return allRecords;
     } catch (error) {
       console.error('Failed to load prices:', error);
       return [];
@@ -69,59 +94,62 @@ export class PriceDataService {
   }
 
   async getLatestPrice(symbol: string): Promise<PriceRecord | null> {
-    const prices = await this.loadAllPrices();
-    const symbolPrices = prices
-      .filter(p => p.symbol === symbol)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const symbolPrices = await this.readSymbolPrices(symbol);
+    if (symbolPrices.length === 0) {
+      return null;
+    }
 
-    return symbolPrices[0] || null;
+    const sorted = symbolPrices.sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+    return sorted[0] || null;
   }
 
   async getPriceByDate(symbol: string, date: string): Promise<PriceRecord | null> {
-    const prices = await this.loadAllPrices();
-    return prices.find(p => p.symbol === symbol && p.date === date) || null;
+    const prices = await this.readSymbolPrices(symbol);
+    return prices.find(p => p.date === date) || null;
   }
 
   async getLatestPrices(symbols: string[]): Promise<Map<string, PriceRecord>> {
-    const prices = await this.loadAllPrices();
     const priceMap = new Map<string, PriceRecord>();
-
     for (const symbol of symbols) {
-      const symbolPrices = prices
-        .filter(p => p.symbol === symbol)
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-      if (symbolPrices[0]) {
-        priceMap.set(symbol, symbolPrices[0]);
+      const latest = await this.getLatestPrice(symbol);
+      if (latest) {
+        priceMap.set(symbol, latest);
       }
     }
-
     return priceMap;
   }
 
   async savePrices(newPrices: PriceRecord[]): Promise<void> {
     try {
-      const existing = await this.loadAllPrices();
-      const priceMap = new Map<string, PriceRecord>();
-
-      for (const price of existing) {
-        const key = `${price.symbol}_${price.date}`;
-        priceMap.set(key, price);
-      }
+      const grouped = new Map<string, PriceRecord[]>();
 
       for (const price of newPrices) {
-        const key = `${price.symbol}_${price.date}`;
-        priceMap.set(key, price);
+        if (!grouped.has(price.symbol)) {
+          grouped.set(price.symbol, []);
+        }
+        grouped.get(price.symbol)!.push(price);
       }
 
-      const allPrices = Array.from(priceMap.values()).sort((a, b) => {
-        const symbolCompare = a.symbol.localeCompare(b.symbol);
-        if (symbolCompare !== 0) return symbolCompare;
-        return new Date(b.date).getTime() - new Date(a.date).getTime();
-      });
+      for (const [symbol, prices] of grouped) {
+        const existing = await this.readSymbolPrices(symbol);
+        const merged = new Map<string, PriceRecord>();
 
-      const csvContent = this.toPriceCSV(allPrices);
-      await invoke('write_data_csv', { filename: PRICES_CSV, content: csvContent });
+        for (const record of existing) {
+          merged.set(record.date, record);
+        }
+
+        for (const record of prices) {
+          merged.set(record.date, record);
+        }
+
+        const sorted = Array.from(merged.values()).sort(
+          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+        );
+        const content = this.buildFileContent(sorted);
+        await invoke('write_price_file', { symbol, content });
+      }
     } catch (error) {
       console.error('Failed to save prices:', error);
       throw error;
@@ -129,30 +157,7 @@ export class PriceDataService {
   }
 
   async appendPrice(price: PriceRecord): Promise<void> {
-    try {
-      const csvRow = [
-        price.symbol,
-        price.date,
-        price.close,
-        price.open || '',
-        price.high || '',
-        price.low || '',
-        price.volume || '',
-        price.source,
-        price.updated_at,
-      ].join(',') + '\n';
-
-      const existing = await invoke<string>('read_data_csv', { filename: PRICES_CSV });
-      if (!existing.trim()) {
-        const header = 'symbol,date,close,open,high,low,volume,source,updated_at\n';
-        await invoke('write_data_csv', { filename: PRICES_CSV, content: header + csvRow });
-      } else {
-        await invoke('append_data_csv', { filename: PRICES_CSV, content: csvRow });
-      }
-    } catch (error) {
-      console.error('Failed to append price:', error);
-      throw error;
-    }
+    await this.savePrices([price]);
   }
 }
 

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import styled from 'styled-components';
-import { priceService } from '../services/priceService';
 import { fxRateService } from '../services/fxRateService';
 import { ApiCredits } from '../types/ApiCredits';
 
@@ -72,28 +71,18 @@ export function ApiCreditsBar() {
 
   useEffect(() => {
     // Initialize with current values
-    const priceCredits = priceService.getApiCredits();
     const fxCredits = fxRateService.getApiCredits();
 
-    // Use the most recent one with actual data
-    if (priceCredits.total > 0 || fxCredits.total > 0) {
-      const mostRecent = new Date(priceCredits.lastUpdated) > new Date(fxCredits.lastUpdated)
-        ? priceCredits
-        : fxCredits.total > 0 ? fxCredits : priceCredits;
-      setCredits(mostRecent);
+    if (fxCredits.total > 0) {
+      setCredits(fxCredits);
     }
 
-    // Subscribe to updates from both services
-    const unsubscribePrice = priceService.onCreditsUpdate(newCredits => {
-      setCredits(newCredits);
-    });
-
+    // Subscribe to updates from FX rate service
     const unsubscribeFx = fxRateService.onCreditsUpdate(newCredits => {
       setCredits(newCredits);
     });
 
     return () => {
-      unsubscribePrice();
       unsubscribeFx();
     };
   }, []);

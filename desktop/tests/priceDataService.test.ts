@@ -14,14 +14,22 @@ describe('priceDataService', () => {
   });
 
   it('parses valid rows and skips malformed data', async () => {
-    const csv = [
-      'symbol,date,close,open,high,low,volume,source,updated_at',
-      'NASDAQ:AAPL,2024-01-01,180.12,181,182,179,1000,twelve_data,2024-01-02T00:00:00.000Z',
+    const fileContent = [
+      'date,close,open,high,low,volume,source,updated_at',
+      '2024-01-01,180.12,181,182,179,1000,twelve_data,2024-01-02T00:00:00.000Z',
       'INVALID,ROW',
-      'NASDAQ:MSFT,2024-01-01,',
+      '2024-01-02,,',
     ].join('\n');
 
-    invokeMock.mockResolvedValueOnce(csv);
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'list_price_files') {
+        return ['NASDAQ:AAPL'];
+      }
+      if (command === 'read_price_file') {
+        return fileContent;
+      }
+      return '';
+    });
 
     const records = await priceDataService.loadAllPrices();
     expect(records).toHaveLength(1);
@@ -32,19 +40,24 @@ describe('priceDataService', () => {
     });
   });
 
-  it('merges and sorts unique price entries before writing', async () => {
-    const existingCsv = [
-      'symbol,date,close,open,high,low,volume,source,updated_at',
-      'NASDAQ:MSFT,2024-01-01,100,,,,,,',
-    ].join('\n');
+  it('merges and writes per-symbol price files', async () => {
+    const existingFiles: Record<string, string> = {
+      'NASDAQ:MSFT': [
+        'date,close,open,high,low,volume,source,updated_at',
+        '2024-01-01,100,,,,,,',
+      ].join('\n'),
+      'NASDAQ:AAPL': 'date,close,open,high,low,volume,source,updated_at\n',
+    };
 
-    let writtenContent = '';
+    const written: Record<string, string> = {};
+
     invokeMock.mockImplementation(async (command: string, payload: any) => {
-      if (command === 'read_data_csv') {
-        return existingCsv;
+      if (command === 'read_price_file') {
+        return existingFiles[payload.symbol] ?? '';
       }
-      if (command === 'write_data_csv') {
-        writtenContent = payload.content;
+      if (command === 'write_price_file') {
+        written[payload.symbol] = payload.content;
+        existingFiles[payload.symbol] = payload.content;
         return;
       }
       return '';
@@ -61,14 +74,14 @@ describe('priceDataService', () => {
       {
         symbol: 'NASDAQ:MSFT',
         date: '2024-01-01',
-        close: 101, // should replace existing
+        close: 101,
         source: 'twelve_data',
         updated_at: '2024-01-02T00:00:00.000Z',
       },
     ]);
 
-    const rows = writtenContent.trim().split('\n').slice(1); // drop header
-    expect(rows[0].startsWith('NASDAQ:AAPL,2024-02-02,200')).toBe(true);
-    expect(rows).toContain('NASDAQ:MSFT,2024-01-01,101,,,,,twelve_data,2024-01-02T00:00:00.000Z');
+    expect(Object.keys(written)).toEqual(['NASDAQ:AAPL', 'NASDAQ:MSFT']);
+    const msftRows = written['NASDAQ:MSFT'].trim().split('\n').slice(1);
+    expect(msftRows[0]).toBe('2024-01-01,101,,,,,twelve_data,2024-01-02T00:00:00.000Z');
   });
 });

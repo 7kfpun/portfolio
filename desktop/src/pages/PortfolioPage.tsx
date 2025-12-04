@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import styled from 'styled-components';
 import { usePortfolioStore } from '../store/portfolioStore';
 import { useTransactionsStore } from '../store/transactionsStore';
@@ -6,6 +6,9 @@ import { useSettingsStore } from '../store/settingsStore';
 import { Position } from '../types/Portfolio';
 import { CurrencyType } from '../types/Settings';
 import { CurrencySelector } from '../components/CurrencySelector';
+import { priceDataService } from '../services/priceDataService';
+import { priceService } from '../services/priceService';
+import { PriceRecord } from '../types/PriceData';
 import {
   RefreshCw,
   TrendingUp,
@@ -14,7 +17,16 @@ import {
   PieChart,
   BarChart3,
   SlidersHorizontal,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
+
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$',
+  TWD: 'NT$',
+  JPY: '¥',
+  HKD: 'HK$',
+};
 
 const Container = styled.div`
   max-width: 1400px;
@@ -22,7 +34,7 @@ const Container = styled.div`
 `;
 
 const Header = styled.div`
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -50,7 +62,7 @@ const Title = styled.h1`
 const Description = styled.p`
   color: #475569;
   margin: 0;
-  font-size: 1.1rem;
+  font-size: 1rem;
 `;
 
 const RefreshButton = styled.button<{ $loading?: boolean }>`
@@ -99,7 +111,7 @@ const LastUpdated = styled.div`
 
 const Card = styled.div`
   border-radius: 16px;
-  padding: 2rem;
+  padding: 1.5rem;
   background: rgba(255, 255, 255, 0.88);
   box-shadow: 0 20px 40px rgba(15, 23, 42, 0.1);
   backdrop-filter: blur(24px);
@@ -114,13 +126,13 @@ const LoadingText = styled.p`
 
 const Stats = styled.div`
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2rem;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
 `;
 
 const StatCard = styled.div<{ $variant?: 'positive' | 'negative' | 'neutral' }>`
-  padding: 1.5rem;
+  padding: 1.25rem;
   background: ${props => {
     if (props.$variant === 'positive') return 'linear-gradient(135deg, rgba(22, 163, 74, 0.1) 0%, rgba(34, 197, 94, 0.1) 100%)';
     if (props.$variant === 'negative') return 'linear-gradient(135deg, rgba(220, 38, 38, 0.1) 0%, rgba(239, 68, 68, 0.1) 100%)';
@@ -137,8 +149,8 @@ const StatCard = styled.div<{ $variant?: 'positive' | 'negative' | 'neutral' }>`
 const StatHeader = styled.div`
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
 `;
 
 const StatLabel = styled.div`
@@ -150,7 +162,7 @@ const StatLabel = styled.div`
 `;
 
 const StatValue = styled.div<{ $color?: string }>`
-  font-size: 1.75rem;
+  font-size: 1.5rem;
   font-weight: 700;
   color: ${props => props.$color || '#0f172a'};
 `;
@@ -162,7 +174,7 @@ const PositionsTable = styled.div`
 const Table = styled.table`
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
 `;
 
 const Thead = styled.thead`
@@ -171,7 +183,7 @@ const Thead = styled.thead`
 `;
 
 const Th = styled.th<{ $alignRight?: boolean; $sortable?: boolean }>`
-  padding: 1rem 1.25rem;
+  padding: 0.75rem 1rem;
   text-align: ${props => (props.$alignRight ? 'right' : 'left')};
   font-weight: 600;
   white-space: nowrap;
@@ -204,13 +216,21 @@ const Tbody = styled.tbody`
 `;
 
 const Td = styled.td`
-  padding: 0.875rem 1.25rem;
+  padding: 0.65rem 1rem;
   border-bottom: 1px solid #e5e7eb;
 
   &.number {
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
+`;
+
+const CurrencyHeader = styled(Th)`
+  min-width: 130px;
+`;
+
+const CurrencyCell = styled(Td)`
+  min-width: 130px;
 `;
 
 const GainLoss = styled.span<{ $positive?: boolean }>`
@@ -241,27 +261,27 @@ const SectionTitle = styled.h2`
 const CurrencyBreakdown = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2rem;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
 `;
 
 const ChartGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 1.5rem;
-  margin-bottom: 2rem;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
 `;
 
 const ChartCard = styled(Card)`
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 1rem;
 `;
 
 const ChartContent = styled.div`
   display: flex;
   align-items: center;
-  gap: 1.5rem;
+  gap: 1rem;
   flex-wrap: wrap;
 `;
 
@@ -355,33 +375,62 @@ const LegendPercent = styled.span`
   margin-left: 0.5rem;
 `;
 
+const normalizeSymbol = (symbol: string): string => symbol.trim().toUpperCase();
+
+const buildPriceMap = (records: PriceRecord[]): Map<string, PriceRecord[]> => {
+  const priceMap = new Map<string, PriceRecord[]>();
+
+  for (const price of records) {
+    const canonical = normalizeSymbol(price.symbol || '');
+    if (!canonical) {
+      continue;
+    }
+    if (!priceMap.has(canonical)) {
+      priceMap.set(canonical, []);
+    }
+    priceMap.get(canonical)!.push(price);
+  }
+
+  priceMap.forEach((prices, symbol) => {
+    priceMap.set(
+      symbol,
+      prices.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    );
+  });
+
+  return priceMap;
+};
+
 const BarsList = styled.div`
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.75rem;
 `;
 
 const BarRow = styled.div`
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
 `;
 
 const BarLabel = styled.div`
-  min-width: 90px;
+  min-width: 80px;
   font-weight: 600;
   color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 `;
 
 const BarValue = styled.div`
   font-variant-numeric: tabular-nums;
   color: #475569;
-  min-width: 120px;
+  min-width: 100px;
 `;
 
 const BarTrack = styled.div`
   flex: 1;
-  height: 10px;
+  height: 8px;
   border-radius: 999px;
   background: #e2e8f0;
   overflow: hidden;
@@ -394,10 +443,10 @@ const BarFill = styled.div<{ $value: number; $color: string }>`
 `;
 
 const FilterPanel = styled.div`
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: 0.75rem;
   align-items: center;
 `;
 
@@ -415,11 +464,11 @@ const FilterHeader = styled.div`
 
 const FilterInput = styled.input`
   flex: 1;
-  min-width: 220px;
-  padding: 0.65rem 0.85rem;
+  min-width: 200px;
+  padding: 0.55rem 0.8rem;
   border-radius: 10px;
   border: 1px solid #e2e8f0;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   transition: border 150ms ease, box-shadow 150ms ease;
 
   &:focus {
@@ -430,13 +479,13 @@ const FilterInput = styled.input`
 `;
 
 const SelectControl = styled.select`
-  padding: 0.6rem 2rem 0.6rem 0.85rem;
+  padding: 0.55rem 1.8rem 0.55rem 0.8rem;
   border-radius: 10px;
   border: 1px solid #e2e8f0;
   background: white;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   cursor: pointer;
-  min-width: 180px;
+  min-width: 160px;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24'%3E%3Cpath fill='%2364748b' d='m12 15l-5-5h10z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
@@ -451,17 +500,17 @@ const SelectControl = styled.select`
 
 const ToggleGroup = styled.div`
   display: inline-flex;
-  gap: 0.5rem;
+  gap: 0.35rem;
   background: #f8fafc;
   border-radius: 999px;
-  padding: 0.25rem;
+  padding: 0.2rem;
 `;
 
 const ToggleOption = styled.button<{ $active?: boolean }>`
   border: none;
   border-radius: 999px;
-  padding: 0.35rem 0.9rem;
-  font-size: 0.8rem;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
   color: ${props => (props.$active ? '#fff' : '#475569')};
@@ -486,6 +535,22 @@ const HeaderRight = styled.div`
   flex-direction: column;
   align-items: flex-end;
   gap: 0.75rem;
+`;
+
+const PrivacyToggleButton = styled.button<{ $active: boolean }>`
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid ${props => (props.$active ? 'transparent' : '#e2e8f0')};
+  background: ${props => (props.$active ? 'linear-gradient(135deg, #667eea, #764ba2)' : '#fff')};
+  color: ${props => (props.$active ? '#fff' : '#475569')};
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: ${props => (props.$active ? '0 8px 20px rgba(102, 126, 234, 0.4)' : 'none')};
+  transition: all 150ms ease;
 `;
 
 const HeaderControls = styled.div`
@@ -560,8 +625,35 @@ export function PortfolioPage() {
   const [gainFilter, setGainFilter] = useState<'all' | 'gainers' | 'losers'>('all');
   const [baseCurrency, setBaseCurrency] = useState<CurrencyType>('USD');
   const [showInBaseCurrency, setShowInBaseCurrency] = useState(false);
+  const [historicalPrices, setHistoricalPrices] = useState<Map<string, PriceRecord[]>>(new Map());
+  const [privacyMode, setPrivacyMode] = useState(false);
+  const historyLogRef = useRef<Set<string>>(new Set());
 
   const settings = useSettingsStore(state => state.settings);
+  const earliestTransactionDate = useMemo(() => {
+    if (transactions.length === 0) return null;
+    const earliestTime = transactions.reduce((min, txn) => {
+      const time = new Date(txn.date).getTime();
+      if (Number.isNaN(time)) {
+        return min;
+      }
+      return Math.min(min, time);
+    }, Number.POSITIVE_INFINITY);
+    if (!Number.isFinite(earliestTime)) return null;
+    return new Date(earliestTime).toISOString().slice(0, 10);
+  }, [transactions]);
+
+  const historyStartDate = useMemo(() => {
+    if (!earliestTransactionDate) return null;
+    const date = new Date(earliestTransactionDate);
+    date.setDate(date.getDate() - 7);
+    return date.toISOString().slice(0, 10);
+  }, [earliestTransactionDate]);
+
+  const positionSymbolsKey = useMemo(
+    () => positions.map(position => position.stock).sort().join('|'),
+    [positions]
+  );
 
   type SortKey =
     | 'stock'
@@ -593,11 +685,51 @@ export function PortfolioPage() {
   }, [loadFxRates]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadHistoricalPrices = async () => {
+      if (positions.length === 0) {
+        setHistoricalPrices(new Map());
+        return;
+      }
+
+      try {
+        const allPrices = await priceDataService.loadAllPrices();
+        if (cancelled) return;
+
+        setHistoricalPrices(buildPriceMap(allPrices));
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load cached prices:', error);
+        }
+      }
+    };
+
+    if (positions.length > 0) {
+      loadHistoricalPrices();
+    } else {
+      setHistoricalPrices(new Map());
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [positionSymbolsKey, positions, historyStartDate]);
+
+  useEffect(() => {
     if (transactions.length > 0) {
       calculatePortfolio();
-      loadCachedPrices().then(() => {
-        refreshPrices();
-      });
+      loadCachedPrices();
+
+      // Background price refresh with timeout (non-blocking)
+      const timer = setTimeout(() => {
+        refreshPrices().catch(err => {
+          console.error('Background price refresh failed:', err);
+          // Don't block UI - just log the error
+        });
+      }, 1000); // Delay 1 second to let UI load first
+
+      return () => clearTimeout(timer);
     }
   }, [transactions.length, calculatePortfolio, loadCachedPrices, refreshPrices]);
 
@@ -620,17 +752,106 @@ export function PortfolioPage() {
   };
 
   const formatCurrency = (value: number, currency: string) => {
-    const symbols: Record<string, string> = {
-      USD: '$',
-      TWD: 'NT$',
-      JPY: '¥',
-      HKD: 'HK$',
-    };
-    return `${symbols[currency] || ''}${value.toLocaleString(undefined, {
+    return `${CURRENCY_SYMBOLS[currency] || ''}${value.toLocaleString(undefined, {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     })}`;
   };
+
+  const displayCurrencyValue = (value: number, currency: string, mask = true) => {
+    if (privacyMode && mask) {
+      return `${CURRENCY_SYMBOLS[currency] || ''}***`;
+    }
+    return formatCurrency(value, currency);
+  };
+
+  const formatSignedCurrency = (value: number, currency: string, mask = true) => {
+    if (privacyMode && mask) {
+      const sign = value >= 0 ? '+' : '-';
+      return `${sign}${CURRENCY_SYMBOLS[currency] || ''}***`;
+    }
+    const formatted = formatCurrency(Math.abs(value), currency);
+    const sign = value >= 0 ? '+' : '-';
+    return `${sign}${formatted}`;
+  };
+
+  const formatShares = (shares: number) => {
+    if (privacyMode) {
+      return '***';
+    }
+    return shares.toFixed(2);
+  };
+
+  const logHistoryIssue = (symbol: string, message: string) => {
+    const key = `${symbol}:${message}`;
+    if (!historyLogRef.current.has(key)) {
+      historyLogRef.current.add(key);
+      console.warn(`[Portfolio] ${message} for ${symbol}`);
+    }
+  };
+
+  const resolvePriceHistory = (symbol: string) => {
+    const canonical = normalizeSymbol(symbol);
+    const history = historicalPrices.get(canonical);
+    if (history && history.length > 0) {
+      return history;
+    }
+    logHistoryIssue(symbol, 'Missing price history');
+    return undefined;
+  };
+
+  const getDailyChange = (position: Position) => {
+    const priceHistory = resolvePriceHistory(position.stock);
+    if (!priceHistory || priceHistory.length < 2) {
+      if (!priceHistory) {
+        logHistoryIssue(position.stock, 'No history to compute daily change');
+      } else {
+        logHistoryIssue(position.stock, `Not enough history (${priceHistory.length} rows)`);
+      }
+      return { amount: undefined, percent: undefined };
+    }
+
+    const latestPrice = position.currentPrice ?? priceHistory[0]?.close;
+    const previousPrice = priceHistory[1]?.close;
+
+    if (
+      latestPrice === undefined ||
+      previousPrice === undefined ||
+      previousPrice === 0
+    ) {
+      logHistoryIssue(position.stock, 'Latest or previous price unavailable');
+      return { amount: undefined, percent: undefined };
+    }
+
+    const perShareChange = latestPrice - previousPrice;
+    const amount = perShareChange * position.shares;
+    const percent = (perShareChange / previousPrice) * 100;
+
+    return { amount, percent };
+  };
+
+  const dailyPortfolioGainLossUSD = useMemo(() => {
+    if (positions.length === 0) return null;
+    let total = 0;
+    let hasData = false;
+
+    positions.forEach(position => {
+      const { amount } = getDailyChange(position);
+      if (amount !== undefined) {
+        hasData = true;
+        total += convertToUSD(amount, position.currency);
+      }
+    });
+
+    return hasData ? total : null;
+  }, [positions, historicalPrices, fxRates]);
+
+  const dailyPortfolioGainLossBase = useMemo(() => {
+    if (dailyPortfolioGainLossUSD === null) {
+      return null;
+    }
+    return convertToBaseCurrency(dailyPortfolioGainLossUSD, 'USD', baseCurrency);
+  }, [dailyPortfolioGainLossUSD, baseCurrency, fxRates]);
 
   const getCurrencyColor = (currency: string) => {
     const colors: Record<string, string> = {
@@ -758,18 +979,36 @@ export function PortfolioPage() {
   const topPositions = useMemo(() => {
     if (fxRates.size === 0) return [];
     const sorted = [...positions].sort((a, b) => {
-      const aValueUSD = convertToUSD(a.currentValue ?? a.totalCost, a.currency);
-      const bValueUSD = convertToUSD(b.currentValue ?? b.totalCost, b.currency);
-      return bValueUSD - aValueUSD;
+      const aValue = convertToBaseCurrency(a.currentValue ?? a.totalCost, a.currency, baseCurrency);
+      const bValue = convertToBaseCurrency(b.currentValue ?? b.totalCost, b.currency, baseCurrency);
+      return bValue - aValue;
     });
     return sorted.slice(0, 5);
-  }, [positions, fxRates]);
+  }, [positions, fxRates, baseCurrency]);
 
   const maxTopValue = useMemo(() => {
     if (topPositions.length === 0) return 1;
-    const values = topPositions.map(position => position.currentValue ?? position.totalCost);
+    const values = topPositions.map(position =>
+      convertToBaseCurrency(position.currentValue ?? position.totalCost, position.currency, baseCurrency)
+    );
     return Math.max(1, ...values);
-  }, [topPositions]);
+  }, [topPositions, baseCurrency, fxRates]);
+
+  const totalsInBaseCurrency = useMemo(() => {
+    if (!summary) {
+      return {
+        totalValue: 0,
+        totalCost: 0,
+        totalGainLoss: 0,
+      };
+    }
+
+    return {
+      totalValue: convertToBaseCurrency(summary.totalValue, 'USD', baseCurrency),
+      totalCost: convertToBaseCurrency(summary.totalCost, 'USD', baseCurrency),
+      totalGainLoss: convertToBaseCurrency(summary.totalGainLoss, 'USD', baseCurrency),
+    };
+  }, [summary, baseCurrency, fxRates]);
 
   if (loading) {
     return (
@@ -801,6 +1040,12 @@ export function PortfolioPage() {
   }
 
   const gainLossVariant = summary.totalGainLoss >= 0 ? 'positive' : 'negative';
+  const dailyGainLossVariant =
+    dailyPortfolioGainLossBase === null
+      ? 'neutral'
+      : dailyPortfolioGainLossBase >= 0
+        ? 'positive'
+        : 'negative';
 
   return (
     <Container>
@@ -815,16 +1060,16 @@ export function PortfolioPage() {
           </Description>
         </HeaderLeft>
         <HeaderRight>
-          <HeaderControls>
-            <CurrencySelector value={baseCurrency} onChange={setBaseCurrency} />
-            <RefreshButton onClick={refreshPrices} disabled={loadingPrices} $loading={loadingPrices}>
-              <RefreshCw size={18} />
-              {loadingPrices ? 'Updating...' : 'Update Prices'}
-            </RefreshButton>
-          </HeaderControls>
-          {lastUpdated && (
-            <LastUpdated>Last updated: {lastUpdated.toLocaleTimeString()}</LastUpdated>
-          )}
+          <CurrencySelector value={baseCurrency} onChange={setBaseCurrency} />
+          <PrivacyToggleButton
+            type="button"
+            onClick={() => setPrivacyMode(prev => !prev)}
+            $active={privacyMode}
+            aria-pressed={privacyMode}
+          >
+            {privacyMode ? <EyeOff size={16} /> : <Eye size={16} />}
+            Privacy {privacyMode ? 'On' : 'Off'}
+          </PrivacyToggleButton>
         </HeaderRight>
       </Header>
 
@@ -832,17 +1077,21 @@ export function PortfolioPage() {
         <StatCard>
           <StatHeader>
             <DollarSign size={20} color="#667eea" />
-            <StatLabel>Total Value</StatLabel>
+            <StatLabel>Total Value ({baseCurrency})</StatLabel>
           </StatHeader>
-          <StatValue>${summary.totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</StatValue>
+          <StatValue>
+            {displayCurrencyValue(totalsInBaseCurrency.totalValue, baseCurrency)}
+          </StatValue>
         </StatCard>
 
         <StatCard>
           <StatHeader>
             <PieChart size={20} color="#667eea" />
-            <StatLabel>Total Cost</StatLabel>
+            <StatLabel>Total Cost ({baseCurrency})</StatLabel>
           </StatHeader>
-          <StatValue>${summary.totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</StatValue>
+          <StatValue>
+            {displayCurrencyValue(totalsInBaseCurrency.totalCost, baseCurrency)}
+          </StatValue>
         </StatCard>
 
         <StatCard $variant={gainLossVariant}>
@@ -852,14 +1101,38 @@ export function PortfolioPage() {
             ) : (
               <TrendingDown size={20} color="#dc2626" />
             )}
-            <StatLabel>Total Gain/Loss</StatLabel>
+            <StatLabel>Total Gain/Loss ({baseCurrency})</StatLabel>
           </StatHeader>
           <StatValue $color={summary.totalGainLoss >= 0 ? '#16a34a' : '#dc2626'}>
+            {formatSignedCurrency(totalsInBaseCurrency.totalGainLoss, baseCurrency)}
+            {' ('}
             {summary.totalGainLoss >= 0 ? '+' : ''}
-            ${summary.totalGainLoss.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            {' '}
-            ({summary.totalGainLoss >= 0 ? '+' : ''}
             {summary.totalGainLossPercent.toFixed(2)}%)
+          </StatValue>
+        </StatCard>
+
+        <StatCard $variant={dailyGainLossVariant}>
+          <StatHeader>
+            <RefreshCw size={20} color="#0ea5e9" />
+            <StatLabel>Daily Gain/Loss ({baseCurrency})</StatLabel>
+          </StatHeader>
+          <StatValue
+            $color={
+              dailyGainLossVariant === 'positive'
+                ? '#16a34a'
+                : dailyGainLossVariant === 'negative'
+                  ? '#dc2626'
+                  : '#0f172a'
+            }
+          >
+            {dailyPortfolioGainLossBase === null
+              ? '—'
+              : formatSignedCurrency(dailyPortfolioGainLossBase, baseCurrency)}
+            {dailyPortfolioGainLossUSD !== null && baseCurrency !== 'USD' && (
+              <div style={{ fontSize: '0.8rem', color: '#475569' }}>
+                ({formatSignedCurrency(dailyPortfolioGainLossUSD, 'USD')})
+              </div>
+            )}
           </StatValue>
         </StatCard>
       </Stats>
@@ -879,7 +1152,7 @@ export function PortfolioPage() {
                   <DonutCenter>
                     <DonutLabel>Total Value</DonutLabel>
                     <DonutValue>
-                      {formatCurrency(summary.totalValue, 'USD')}
+                      {displayCurrencyValue(summary.totalValue, 'USD')}
                     </DonutValue>
                   </DonutCenter>
                 </DonutChart>
@@ -891,7 +1164,7 @@ export function PortfolioPage() {
                       {item.currency}
                     </LegendBadge>
                     <div>
-                      <LegendValue>{formatCurrency(item.value, item.currency)}</LegendValue>
+                      <LegendValue>{displayCurrencyValue(item.value, item.currency)}</LegendValue>
                       <LegendPercent>{item.percent.toFixed(1)}%</LegendPercent>
                     </div>
                   </ChartLegendItem>
@@ -910,12 +1183,18 @@ export function PortfolioPage() {
           ) : (
             <BarsList>
               {topPositions.map(position => {
-                const value = position.currentValue ?? position.totalCost;
+                const value = convertToBaseCurrency(
+                  position.currentValue ?? position.totalCost,
+                  position.currency,
+                  baseCurrency
+                );
                 const percent = Math.max(4, (value / maxTopValue) * 100);
                 return (
                   <BarRow key={position.stock}>
                     <BarLabel>{position.stock}</BarLabel>
-                    <BarValue>{formatCurrency(value, position.currency)}</BarValue>
+                    <BarValue>
+                      {displayCurrencyValue(value, baseCurrency)}
+                    </BarValue>
                     <BarTrack>
                       <BarFill
                         $value={percent}
@@ -924,8 +1203,10 @@ export function PortfolioPage() {
                     </BarTrack>
                     {position.gainLoss !== undefined && (
                       <GainLoss $positive={position.gainLoss >= 0}>
-                        {position.gainLoss >= 0 ? '+' : ''}
-                        {formatCurrency(position.gainLoss, position.currency)}
+                        {formatSignedCurrency(
+                          convertToBaseCurrency(position.gainLoss, position.currency, baseCurrency),
+                          baseCurrency
+                        )}
                       </GainLoss>
                     )}
                   </BarRow>
@@ -949,14 +1230,13 @@ export function PortfolioPage() {
                 <StatLabel>{data.positions} Position{data.positions !== 1 ? 's' : ''}</StatLabel>
               </StatHeader>
               <StatValue style={{ fontSize: '1.25rem' }}>
-                {formatCurrency(data.value, currency)}
+                {displayCurrencyValue(data.value, currency)}
               </StatValue>
               <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.5rem' }}>
-                Cost: {formatCurrency(data.cost, currency)}
+                Cost: {displayCurrencyValue(data.cost, currency)}
               </div>
               <GainLoss $positive={data.gainLoss >= 0} style={{ fontSize: '0.9rem' }}>
-                {data.gainLoss >= 0 ? '+' : ''}
-                {formatCurrency(data.gainLoss, currency)}
+                {formatSignedCurrency(data.gainLoss, currency)}
               </GainLoss>
             </StatCard>
           ))}
@@ -1027,10 +1307,10 @@ export function PortfolioPage() {
                   Stock
                   {getSortIndicator('stock')}
                 </Th>
-                <Th $sortable onClick={() => handleTableSort('currency')}>
+                <CurrencyHeader $sortable onClick={() => handleTableSort('currency')}>
                   Currency
                   {getSortIndicator('currency')}
-                </Th>
+                </CurrencyHeader>
                 <Th $alignRight $sortable onClick={() => handleTableSort('shares')}>
                   Shares
                   {getSortIndicator('shares')}
@@ -1055,12 +1335,13 @@ export function PortfolioPage() {
                   Gain/Loss
                   {getSortIndicator('gainLoss')}
                 </Th>
+                <Th $alignRight>Daily Gain/Loss</Th>
               </tr>
             </Thead>
             <Tbody>
               {filteredPositions.length === 0 ? (
                 <tr>
-                  <Td colSpan={8} style={{ textAlign: 'center' }}>
+                  <Td colSpan={9} style={{ textAlign: 'center' }}>
                     No positions match your filters.
                   </Td>
                 </tr>
@@ -1090,42 +1371,65 @@ export function PortfolioPage() {
                       ? convertToBaseCurrency(position.gainLoss, position.currency, baseCurrency)
                       : position.gainLoss
                     : undefined;
+                  const { amount: rawDailyGainLoss, percent: dailyGainLossPercent } = getDailyChange(position);
+                  const dailyGainLoss = rawDailyGainLoss !== undefined
+                    ? showInBaseCurrency
+                      ? convertToBaseCurrency(rawDailyGainLoss, position.currency, baseCurrency)
+                      : rawDailyGainLoss
+                    : undefined;
 
                   return (
                   <tr key={`${position.stock}-${index}`}>
                     <Td>{position.stock}</Td>
-                    <Td>
+                    <CurrencyCell>
                       <CurrencyBadge $color={getCurrencyColor(position.currency)}>
                         {position.currency}
                         {showInBaseCurrency && position.currency !== baseCurrency && ` → ${baseCurrency}`}
                       </CurrencyBadge>
-                    </Td>
-                    <Td className="number">{position.shares.toFixed(2)}</Td>
+                    </CurrencyCell>
+                    <Td className="number">{formatShares(position.shares)}</Td>
                     <Td className="number">
-                      {formatCurrency(avgCost, displayCurrency)}
+                      {displayCurrencyValue(avgCost, displayCurrency)}
                     </Td>
                     <Td className="number">
-                      {formatCurrency(totalCost, displayCurrency)}
+                      {displayCurrencyValue(totalCost, displayCurrency)}
                     </Td>
                     <Td className="number">
                       {currentPrice !== undefined
-                        ? formatCurrency(currentPrice, displayCurrency)
+                        ? displayCurrencyValue(currentPrice, displayCurrency)
                         : '—'}
                     </Td>
                     <Td className="number">
-                      {formatCurrency(currentValue, displayCurrency)}
+                      {displayCurrencyValue(currentValue, displayCurrency)}
                     </Td>
                     <Td className="number">
                       {gainLoss !== undefined ? (
                         <>
                           <GainLoss $positive={gainLoss >= 0}>
-                            {gainLoss >= 0 ? '+' : ''}
-                            {formatCurrency(gainLoss, displayCurrency)}
+                            {formatSignedCurrency(gainLoss, displayCurrency)}
                           </GainLoss>
                           <br />
                           <GainLoss $positive={gainLoss >= 0} style={{ fontSize: '0.8rem' }}>
                             ({gainLoss >= 0 ? '+' : ''}
                             {position.gainLossPercent?.toFixed(2)}%)
+                          </GainLoss>
+                        </>
+                      ) : (
+                        '—'
+                      )}
+                    </Td>
+                    <Td className="number">
+                      {dailyGainLoss !== undefined ? (
+                        <>
+                          <GainLoss $positive={dailyGainLoss >= 0}>
+                            {formatSignedCurrency(dailyGainLoss, displayCurrency)}
+                          </GainLoss>
+                          <br />
+                          <GainLoss $positive={(dailyGainLoss ?? 0) >= 0} style={{ fontSize: '0.8rem' }}>
+                            ({dailyGainLossPercent !== undefined
+                              ? `${dailyGainLossPercent >= 0 ? '+' : ''}${dailyGainLossPercent.toFixed(2)}%`
+                              : 'N/A'}
+                            )
                           </GainLoss>
                         </>
                       ) : (

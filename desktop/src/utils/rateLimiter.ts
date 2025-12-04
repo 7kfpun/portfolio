@@ -2,22 +2,44 @@ type RateLimiterTask<T> = () => Promise<T>;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+interface RateLimiterOptions {
+  maxIntervalMs?: number;
+}
+
 export class RateLimiter {
   private queue: Promise<unknown> = Promise.resolve();
   private lastExecuted = 0;
   private readonly minInterval: number;
+  private readonly maxInterval: number;
+  private currentInterval: number;
 
-  constructor(requestsPerMinute: number) {
+  constructor(requestsPerMinute: number, options: RateLimiterOptions = {}) {
     const safeRpm = Math.max(1, requestsPerMinute);
     this.minInterval = Math.floor(60000 / safeRpm);
+    this.maxInterval = Math.max(
+      this.minInterval,
+      options.maxIntervalMs ?? this.minInterval * 16
+    );
+    this.currentInterval = this.minInterval;
+  }
+
+  private adjustInterval(waited: boolean) {
+    if (waited) {
+      this.currentInterval = Math.min(this.currentInterval * 2, this.maxInterval);
+    } else if (this.currentInterval > this.minInterval) {
+      this.currentInterval = Math.max(this.minInterval, Math.floor(this.currentInterval / 2));
+    }
   }
 
   schedule<T>(task: RateLimiterTask<T>): Promise<T> {
     const runTask = async () => {
       const now = Date.now();
-      const waitTime = Math.max(0, this.lastExecuted + this.minInterval - now);
+      const waitTime = Math.max(0, this.lastExecuted + this.currentInterval - now);
       if (waitTime > 0) {
         await sleep(waitTime);
+        this.adjustInterval(true);
+      } else {
+        this.adjustInterval(false);
       }
 
       this.lastExecuted = Date.now();
