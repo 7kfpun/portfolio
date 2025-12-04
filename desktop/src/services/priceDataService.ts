@@ -47,7 +47,25 @@ export class PriceDataService {
     return records;
   }
 
-  private async readSymbolPrices(symbol: string): Promise<PriceRecord[]> {
+  private async readSymbolPrices(
+    symbol: string,
+    options?: { latestOnly?: boolean }
+  ): Promise<PriceRecord[]> {
+    const useLatest = options?.latestOnly !== false;
+    if (useLatest) {
+      try {
+        const content = await invoke<string>('read_price_file_head', {
+          symbol,
+          lines: 8,
+        });
+        if (content && content.trim()) {
+          return this.parsePriceFile(symbol, content);
+        }
+      } catch (error) {
+        console.warn(`Failed to read price head for ${symbol}:`, error);
+      }
+    }
+
     try {
       const content = await invoke<string>('read_price_file', { symbol });
       return this.parsePriceFile(symbol, content);
@@ -76,13 +94,21 @@ export class PriceDataService {
     return lines.join('\n') + '\n';
   }
 
-  async loadAllPrices(): Promise<PriceRecord[]> {
+  async loadAllPrices(options?: { latestOnly?: boolean }): Promise<PriceRecord[]> {
+    const useLatest = options?.latestOnly !== false;
+
     try {
-      const symbols = await invoke<string[]>('list_price_files');
+      let symbols: string[] = [];
+      try {
+        symbols = await invoke<string[]>('list_price_files');
+      } catch (err) {
+        console.error('Failed to list price files:', err);
+        return [];
+      }
       const allRecords: PriceRecord[] = [];
 
       for (const symbol of symbols) {
-        const symbolRecords = await this.readSymbolPrices(symbol);
+        const symbolRecords = await this.readSymbolPrices(symbol, { latestOnly: useLatest });
         allRecords.push(...symbolRecords);
       }
 
@@ -133,7 +159,7 @@ export class PriceDataService {
       }
 
       for (const [symbol, prices] of grouped) {
-        const existing = await this.readSymbolPrices(symbol);
+        const existing = await this.readSymbolPrices(symbol, { latestOnly: false });
         const merged = new Map<string, PriceRecord>();
 
         for (const record of existing) {
@@ -158,6 +184,13 @@ export class PriceDataService {
 
   async appendPrice(price: PriceRecord): Promise<void> {
     await this.savePrices([price]);
+  }
+
+  async getPricesForSymbol(symbol: string): Promise<PriceRecord[]> {
+    const records = await this.readSymbolPrices(symbol, { latestOnly: false });
+    return records.sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
   }
 }
 

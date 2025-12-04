@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import styled from 'styled-components';
-import { Key, Database } from 'lucide-react';
+import { Key, Database, DollarSign } from 'lucide-react';
 
 const LayoutContainer = styled.div`
   display: flex;
@@ -65,8 +65,8 @@ const Content = styled.main`
 `;
 
 interface SettingsLayoutProps {
-  currentPage: 'keys' | 'data-readiness';
-  onNavigate: (page: 'keys' | 'data-readiness') => void;
+  currentPage: 'keys' | 'data-readiness' | 'currency-data';
+  onNavigate: (page: 'keys' | 'data-readiness' | 'currency-data') => void;
   children: ReactNode;
 }
 
@@ -90,7 +90,16 @@ export function SettingsLayout({ currentPage, onNavigate, children }: SettingsLa
               onClick={() => onNavigate('data-readiness')}
             >
               <Database size={18} />
-              Data Readiness
+              Historical Data
+            </NavButton>
+          </NavItem>
+          <NavItem $active={currentPage === 'currency-data'}>
+            <NavButton
+              $active={currentPage === 'currency-data'}
+              onClick={() => onNavigate('currency-data')}
+            >
+              <DollarSign size={18} />
+              FX Rates
             </NavButton>
           </NavItem>
         </NavList>

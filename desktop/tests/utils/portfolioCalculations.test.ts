@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { calculatePositions, updatePositionWithPrice } from './portfolioCalculations';
-import { Transaction } from '../types/Transaction';
+import { calculatePositions, updatePositionWithPrice } from '../../src/utils/portfolioCalculations';
+import { Transaction } from '../../src/types/Transaction';
 
 describe('portfolioCalculations', () => {
   describe('calculatePositions', () => {

@@ -27,10 +27,10 @@ fn greet(name: &str) -> String {
     format!("Hello from Rust, {name}! 👋")
 }
 
-const FX_RATES_HEADER: &str = "currency_pair,date,rate,source,updated_at\n";
 const SETTINGS_HEADER: &str = "key,value\n";
 const SECURITIES_HEADER: &str =
     "ticker,name,exchange,currency,type,sector,data_source,api_symbol,last_updated\n";
+const PRICE_FILE_HEADER: &str = "date,close,open,high,low,volume,source,updated_at";
 #[derive(Clone, Debug)]
 struct PriceRecordEntry {
     symbol: String,
@@ -41,6 +41,42 @@ struct PriceRecordEntry {
     low: Option<f64>,
     volume: Option<f64>,
     source: String,
+}
+
+fn build_price_csv_content(entries: &[PriceRecordEntry]) -> String {
+    let mut content = String::new();
+    content.push_str(PRICE_FILE_HEADER);
+    content.push('\n');
+
+    let updated_at = Utc::now().to_rfc3339();
+
+    for entry in entries {
+        content.push_str(&format!(
+            "{},{},{},{},{},{},{},{}\n",
+            entry.date.format("%Y-%m-%d"),
+            entry.close,
+            entry
+                .open
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "".to_string()),
+            entry
+                .high
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "".to_string()),
+            entry
+                .low
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "".to_string()),
+            entry
+                .volume
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "".to_string()),
+            entry.source,
+            updated_at
+        ));
+    }
+
+    content
 }
 
 #[derive(Deserialize)]
@@ -181,7 +217,16 @@ fn get_exchange_and_symbol(stock: &str) -> (Option<String>, String) {
     let mut parts = stock.splitn(2, ':');
     let first = parts.next().unwrap_or("").to_string();
     let second = parts.next().unwrap_or("").to_string();
-    let known = ["NASDAQ", "NYSE", "NYSEARCA", "TWSE", "JPX", "HKEX"];
+    let known = [
+        "NASDAQ",
+        "NYSE",
+        "NYSEARCA",
+        "NYSEAMERICAN",
+        "OTCMKTS",
+        "TWSE",
+        "JPX",
+        "HKEX",
+    ];
 
     if known.iter().any(|ex| ex == &first) {
         return (Some(first), second);
@@ -429,6 +474,33 @@ fn get_splits_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(splits_dir)
 }
 
+fn get_fx_rates_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = get_data_dir(app_handle)?;
+    let fx_rates_dir = data_dir.join("fx_rates");
+    ensure_dir(&fx_rates_dir)?;
+    Ok(fx_rates_dir)
+}
+
+fn read_file_head(path: &Path, lines: usize) -> Result<String, String> {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+
+    let file = File::open(path).map_err(|e| format!("Failed to open {:?}: {}", path, e))?;
+    let reader = BufReader::new(file);
+
+    let mut output = String::new();
+    for (idx, line_result) in reader.lines().enumerate() {
+        if idx >= lines {
+            break;
+        }
+        let line = line_result.map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
+        output.push_str(&line);
+        output.push('\n');
+    }
+
+    Ok(output)
+}
+
 fn write_worker_log(app_handle: &tauri::AppHandle, message: &str) -> Result<(), String> {
     let logs_dir = get_logs_dir(app_handle)?;
     let log_file = logs_dir.join("history_worker.log");
@@ -447,7 +519,6 @@ fn initialize_storage(app_handle: &tauri::AppHandle) -> Result<(), String> {
     let _ = get_logs_dir(app_handle)?;
 
     let required_files = vec![
-        (data_dir.join("fx_rates.csv"), FX_RATES_HEADER),
         (data_dir.join("settings.csv"), SETTINGS_HEADER),
         (data_dir.join("securities.csv"), SECURITIES_HEADER),
     ];
@@ -593,18 +664,26 @@ fn append_data_csv(
     append_storage_csv(app_handle, filename, content)
 }
 
+fn persist_price_file_content(
+    app_handle: &tauri::AppHandle,
+    symbol: &str,
+    content: &str,
+) -> Result<(), String> {
+    let prices_dir = get_prices_dir(app_handle)?;
+    let safe_symbol = symbol.replace(':', "_");
+    let file_path = prices_dir.join(format!("{}.csv", safe_symbol));
+
+    write(&file_path, content)
+        .map_err(|e| format!("Failed to write price file for '{}': {}", symbol, e))
+}
+
 #[tauri::command]
 fn write_price_file(
     app_handle: tauri::AppHandle,
     symbol: String,
     content: String,
 ) -> Result<(), String> {
-    let prices_dir = get_prices_dir(&app_handle)?;
-    let safe_symbol = symbol.replace(':', "_");
-    let file_path = prices_dir.join(format!("{}.csv", safe_symbol));
-
-    write(&file_path, content)
-        .map_err(|e| format!("Failed to write price file for '{}': {}", symbol, e))
+    persist_price_file_content(&app_handle, &symbol, &content)
 }
 
 #[tauri::command]
@@ -622,6 +701,22 @@ fn read_price_file(
 
     read_to_string(&file_path)
         .map_err(|e| format!("Failed to read price file for '{}': {}", symbol, e))
+}
+
+#[tauri::command]
+fn read_price_file_head(
+    app_handle: tauri::AppHandle,
+    symbol: String,
+    lines: Option<usize>,
+) -> Result<String, String> {
+    let prices_dir = get_prices_dir(&app_handle)?;
+    let safe_symbol = symbol.replace(':', "_");
+    let file_path = prices_dir.join(format!("{}.csv", safe_symbol));
+    if !file_path.exists() {
+        return Ok(String::new());
+    }
+    let max_lines = lines.unwrap_or(8).max(1);
+    read_file_head(&file_path, max_lines)
 }
 
 #[tauri::command]
@@ -694,6 +789,82 @@ fn list_split_files(app_handle: tauri::AppHandle) -> Result<Vec<String>, String>
     symbols.sort();
     Ok(symbols)
 }
+
+fn persist_fx_rate_file(
+    app_handle: &tauri::AppHandle,
+    pair: &str,
+    content: &str,
+) -> Result<(), String> {
+    let fx_rates_dir = get_fx_rates_dir(app_handle)?;
+    let safe_pair = pair.replace('/', "_");
+    let file_path = fx_rates_dir.join(format!("{}.csv", safe_pair));
+
+    write(&file_path, content)
+        .map_err(|e| format!("Failed to write FX rate file for '{}': {}", pair, e))
+}
+
+#[tauri::command]
+fn write_fx_rate_file(
+    app_handle: tauri::AppHandle,
+    pair: String,
+    content: String,
+) -> Result<(), String> {
+    persist_fx_rate_file(&app_handle, &pair, &content)
+}
+
+#[tauri::command]
+fn read_fx_rate_file(
+    app_handle: tauri::AppHandle,
+    pair: String,
+) -> Result<String, String> {
+    let fx_rates_dir = get_fx_rates_dir(&app_handle)?;
+    let safe_pair = pair.replace('/', "_");
+    let file_path = fx_rates_dir.join(format!("{}.csv", safe_pair));
+
+    if !file_path.exists() {
+        return Ok(String::new());
+    }
+
+    read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read FX rate file for '{}': {}", pair, e))
+}
+
+#[tauri::command]
+fn read_fx_rate_file_head(
+    app_handle: tauri::AppHandle,
+    pair: String,
+    lines: Option<usize>,
+) -> Result<String, String> {
+    let fx_rates_dir = get_fx_rates_dir(&app_handle)?;
+    let safe_pair = pair.replace('/', "_");
+    let file_path = fx_rates_dir.join(format!("{}.csv", safe_pair));
+    if !file_path.exists() {
+        return Ok(String::new());
+    }
+    let max_lines = lines.unwrap_or(8).max(1);
+    read_file_head(&file_path, max_lines)
+}
+
+#[tauri::command]
+fn list_fx_rate_files(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let fx_rates_dir = get_fx_rates_dir(&app_handle)?;
+    let mut pairs = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&fx_rates_dir) {
+        for entry in entries.flatten() {
+            if let Some(filename) = entry.file_name().to_str() {
+                if filename.ends_with(".csv") {
+                    let pair = filename.trim_end_matches(".csv").replace('_', "/");
+                    pairs.push(pair);
+                }
+            }
+        }
+    }
+
+    pairs.sort();
+    Ok(pairs)
+}
+
 
 #[tauri::command]
 fn sync_history_once(app_handle: tauri::AppHandle) -> Result<(), String> {
@@ -813,46 +984,12 @@ fn save_price_records(
     app_handle: &tauri::AppHandle,
     price_map: &HashMap<String, Vec<PriceRecordEntry>>,
 ) -> Result<(), String> {
-    let prices_dir = get_prices_dir(app_handle)?;
     for (symbol, records) in price_map.iter() {
-        let safe_symbol = symbol.replace(':', "_");
-        let file_path = prices_dir.join(format!("{}.csv", safe_symbol));
         let mut entries = records.clone();
         entries.sort_by(|a, b| b.date.cmp(&a.date));
 
-        let mut file = File::create(&file_path)
-            .map_err(|e| format!("Failed to write price file for {}: {}", symbol, e))?;
-
-        writeln!(
-            file,
-            "date,close,open,high,low,volume,source,updated_at"
-        )
-        .map_err(|e| format!("Failed to write header for {}: {}", symbol, e))?;
-
-        let updated_at = Utc::now().to_rfc3339();
-        for entry in entries {
-            writeln!(
-                file,
-                "{},{},{},{},{},{},{},{}",
-                entry.date.format("%Y-%m-%d"),
-                entry.close,
-                entry.open
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "".to_string()),
-                entry.high
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "".to_string()),
-                entry.low
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "".to_string()),
-                entry.volume
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "".to_string()),
-                entry.source,
-                updated_at,
-            )
-            .map_err(|e| format!("Failed to write price row for {}: {}", symbol, e))?;
-        }
+        let csv_content = build_price_csv_content(&entries);
+        persist_price_file_content(app_handle, symbol, &csv_content)?;
     }
     Ok(())
 }
@@ -1349,10 +1486,15 @@ fn main() {
             append_data_csv,
             write_price_file,
             read_price_file,
+            read_price_file_head,
             list_price_files,
             write_split_file,
             read_split_file,
             list_split_files,
+            write_fx_rate_file,
+            read_fx_rate_file,
+            read_fx_rate_file_head,
+            list_fx_rate_files,
             sync_history_once,
             start_history_worker,
             get_history_log,

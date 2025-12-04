@@ -195,7 +195,8 @@ export class HistoricalDataService {
       const lows = quote.low || [];
       const volumes = quote.volume || [];
 
-      const csvLines: string[] = ['date,close,open,high,low,volume,source,updated_at'];
+      const header = 'date,close,open,high,low,volume,source,updated_at';
+      const rows: Array<{ timestamp: number; line: string }> = [];
 
       for (let i = 0; i < timestamps.length; i++) {
         const date = new Date(timestamps[i] * 1000);
@@ -209,11 +210,16 @@ export class HistoricalDataService {
           const volume = volumes[i] !== null ? volumes[i] : '';
           const updatedAt = new Date().toISOString();
 
-          csvLines.push(
-            `${dateStr},${close},${open},${high},${low},${volume},yahoo_finance,${updatedAt}`
-          );
+          rows.push({
+            timestamp: date.getTime(),
+            line: `${dateStr},${close},${open},${high},${low},${volume},yahoo_finance,${updatedAt}`,
+          });
         }
       }
+
+      // Write newest -> oldest so we can read the top rows quickly
+      rows.sort((a, b) => b.timestamp - a.timestamp);
+      const csvLines = [header, ...rows.map(row => row.line)];
 
       await this.writeSymbolFile(ticker, csvLines.join('\n') + '\n');
 

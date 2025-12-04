@@ -3,11 +3,9 @@ import { usePortfolioStore } from '../src/store/portfolioStore';
 import { useTransactionsStore } from '../src/store/transactionsStore';
 import { priceService } from '../src/services/priceService';
 import { fxRateDataService } from '../src/services/fxRateDataService';
-import { fxRateService } from '../src/services/fxRateService';
 
 vi.mock('../src/services/priceService');
 vi.mock('../src/services/fxRateDataService');
-vi.mock('../src/services/fxRateService');
 
 describe('portfolioStore', () => {
   beforeEach(() => {
@@ -183,13 +181,12 @@ describe('portfolioStore', () => {
     consoleSpy.mockRestore();
   });
 
-  it('loads FX rates from cache and fetches missing ones', async () => {
+  it('loads FX rates from cache', async () => {
     const cachedRates = [
-      { from_currency: 'TWD', to_currency: 'USD', rate: 0.0312, date: '2024-01-01', source: 'twelve_data' as const, updated_at: '2024-01-01T00:00:00Z' },
+      { from_currency: 'TWD', to_currency: 'USD', rate: 0.0312, date: '2024-01-01', source: 'yahoo_finance' as const, updated_at: '2024-01-01T00:00:00Z' },
     ];
 
     vi.mocked(fxRateDataService.loadAllRates).mockResolvedValue(cachedRates);
-    vi.mocked(fxRateService.getBatchRates).mockResolvedValue(new Map());
 
     const { loadFxRates } = usePortfolioStore.getState();
     await loadFxRates();
@@ -199,24 +196,16 @@ describe('portfolioStore', () => {
     expect(state.fxRates.get('USD')).toBe(1);
   });
 
-  it('fetches missing FX rates when not in cache', async () => {
-    vi.mocked(fxRateDataService.loadAllRates)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { from_currency: 'JPY', to_currency: 'USD', rate: 0.0067, date: '2024-01-01', source: 'twelve_data' as const, updated_at: '2024-01-01T00:00:00Z' },
-        { from_currency: 'HKD', to_currency: 'USD', rate: 0.1282, date: '2024-01-01', source: 'twelve_data' as const, updated_at: '2024-01-01T00:00:00Z' },
-      ]);
+  it('loads multiple FX rates from cache', async () => {
+    const cachedRates = [
+      { from_currency: 'JPY', to_currency: 'USD', rate: 0.0067, date: '2024-01-01', source: 'yahoo_finance' as const, updated_at: '2024-01-01T00:00:00Z' },
+      { from_currency: 'HKD', to_currency: 'USD', rate: 0.1282, date: '2024-01-01', source: 'yahoo_finance' as const, updated_at: '2024-01-01T00:00:00Z' },
+    ];
 
-    vi.mocked(fxRateService.getBatchRates).mockResolvedValue(new Map());
+    vi.mocked(fxRateDataService.loadAllRates).mockResolvedValue(cachedRates);
 
     const { loadFxRates } = usePortfolioStore.getState();
     await loadFxRates();
-
-    expect(fxRateService.getBatchRates).toHaveBeenCalledWith([
-      { from: 'TWD', to: 'USD' },
-      { from: 'JPY', to: 'USD' },
-      { from: 'HKD', to: 'USD' },
-    ]);
 
     const state = usePortfolioStore.getState();
     expect(state.fxRates.get('JPY')).toBe(0.0067);

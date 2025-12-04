@@ -3,8 +3,6 @@ import { AppSettings } from '../types/Settings';
 import { settingsService } from '../services/settingsService';
 
 const DEFAULT_SETTINGS: AppSettings = {
-  apiKeyTwelveData: '',
-  apiKeyMassive: '',
   baseCurrency: 'USD',
 };
 

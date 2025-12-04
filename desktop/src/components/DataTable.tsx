@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import styled from 'styled-components';
 import { Search } from 'lucide-react';
 import { Transaction } from '../types/Transaction';
+import { parseNumericString } from '../utils/csvUtils';
 
 const TableWrapper = styled.div`
   width: 100%;
@@ -242,8 +243,8 @@ export function DataTable({ transactions }: DataTableProps) {
         }
 
         if (sortConfig.key === 'quantity' || sortConfig.key === 'price' || sortConfig.key === 'fees') {
-          const aNum = parseFloat(aVal.replace(/[^0-9.-]/g, '')) || 0;
-          const bNum = parseFloat(bVal.replace(/[^0-9.-]/g, '')) || 0;
+          const aNum = parseNumericString(aVal, 0);
+          const bNum = parseNumericString(bVal, 0);
           return sortConfig.direction === 'asc' ? aNum - bNum : bNum - aNum;
         }
 

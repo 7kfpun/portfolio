@@ -40,6 +40,67 @@ describe('priceDataService', () => {
     });
   });
 
+  it('prefers reading the file head when available', async () => {
+    const headContent = [
+      'date,close,open,high,low,volume,source,updated_at',
+      '2024-03-01,150,,,,,yahoo_finance,2024-03-02T00:00:00.000Z',
+    ].join('\n');
+
+    invokeMock.mockImplementation(async (command: string, payload: any) => {
+      if (command === 'list_price_files') {
+        return ['NASDAQ:AAPL'];
+      }
+      if (command === 'read_price_file_head') {
+        expect(payload).toEqual({ symbol: 'NASDAQ:AAPL', lines: 8 });
+        return headContent;
+      }
+      if (command === 'read_price_file') {
+        throw new Error('Full file read should not be called when head succeeds');
+      }
+      return '';
+    });
+
+    const records = await priceDataService.loadAllPrices();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      symbol: 'NASDAQ:AAPL',
+      date: '2024-03-01',
+      close: 150,
+    });
+  });
+
+  it('falls back to reading the full file when head read fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const fullContent = [
+      'date,close,open,high,low,volume,source,updated_at',
+      '2024-04-01,210,,,,,yahoo_finance,2024-04-02T00:00:00.000Z',
+    ].join('\n');
+
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'list_price_files') {
+        return ['NASDAQ:AAPL'];
+      }
+      if (command === 'read_price_file_head') {
+        throw new Error('Head read unavailable');
+      }
+      if (command === 'read_price_file') {
+        return fullContent;
+      }
+      return '';
+    });
+
+    const records = await priceDataService.loadAllPrices();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      symbol: 'NASDAQ:AAPL',
+      date: '2024-04-01',
+      close: 210,
+    });
+
+    warnSpy.mockRestore();
+  });
+
   it('merges and writes per-symbol price files', async () => {
     const existingFiles: Record<string, string> = {
       'NASDAQ:MSFT': [

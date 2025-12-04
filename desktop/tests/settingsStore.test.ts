@@ -8,8 +8,6 @@ describe('settingsStore', () => {
   beforeEach(() => {
     useSettingsStore.setState({
       settings: {
-        apiKeyTwelveData: '',
-        apiKeyMassive: '',
         baseCurrency: 'USD',
       },
       loading: false,
@@ -21,8 +19,6 @@ describe('settingsStore', () => {
   it('initializes with default settings', () => {
     const state = useSettingsStore.getState();
     expect(state.settings).toEqual({
-      apiKeyTwelveData: '',
-      apiKeyMassive: '',
       baseCurrency: 'USD',
     });
     expect(state.loading).toBe(false);
@@ -31,8 +27,6 @@ describe('settingsStore', () => {
 
   it('loads settings successfully', async () => {
     const mockSettings = {
-      apiKeyTwelveData: 'test-key-12data',
-      apiKeyMassive: 'test-key-massive',
       baseCurrency: 'TWD' as const,
     };
 
@@ -54,8 +48,6 @@ describe('settingsStore', () => {
           setTimeout(
             () =>
               resolve({
-                apiKeyTwelveData: '',
-                apiKeyMassive: '',
                 baseCurrency: 'USD',
               }),
             100
@@ -89,8 +81,6 @@ describe('settingsStore', () => {
 
   it('updates settings successfully', async () => {
     const newSettings = {
-      apiKeyTwelveData: 'new-key-12data',
-      apiKeyMassive: 'new-key-massive',
       baseCurrency: 'JPY' as const,
     };
 
@@ -109,8 +99,6 @@ describe('settingsStore', () => {
     vi.mocked(settingsService.saveSettings).mockRejectedValue(new Error(errorMessage));
 
     const newSettings = {
-      apiKeyTwelveData: 'new-key',
-      apiKeyMassive: 'new-key',
       baseCurrency: 'USD' as const,
     };
 
@@ -136,8 +124,6 @@ describe('settingsStore', () => {
     vi.mocked(settingsService.saveSettings).mockRejectedValue('String error');
 
     const newSettings = {
-      apiKeyTwelveData: 'new-key',
-      apiKeyMassive: 'new-key',
       baseCurrency: 'USD' as const,
     };
 

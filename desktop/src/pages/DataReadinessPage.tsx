@@ -1,10 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import styled from 'styled-components';
-import { Download, Check, X, ChevronUp, ChevronDown, Square } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import styled, { keyframes } from 'styled-components';
+import { Download, Check, X, ChevronUp, ChevronDown, Square, Loader2 } from 'lucide-react';
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { Container, Header, Meta, Title, Description, Card } from '../components/PageLayout';
 import { historicalDataService } from '../services/historicalDataService';
 import { bulkDownloadManager, BulkDownloadState } from '../services/bulkDownloadManager';
 import { StockDataCoverage, SplitHistory } from '../types/HistoricalData';
+import { priceDataService } from '../services/priceDataService';
+import { PriceRecord } from '../types/PriceData';
 
 const TableContainer = styled.div`
   border: 1px solid #cbd5e1;
@@ -53,7 +64,7 @@ const Th = styled.th<{ $sortable?: boolean }>`
 
 const Tbody = styled.tbody``;
 
-const Tr = styled.tr`
+const Tr = styled.tr<{ $clickable?: boolean }>`
   &:nth-child(even) {
     background: #f8fafc;
   }
@@ -61,6 +72,8 @@ const Tr = styled.tr`
   &:hover {
     background: #e0e7ff;
   }
+
+  cursor: ${props => (props.$clickable ? 'pointer' : 'default')};
 `;
 
 const Td = styled.td`
@@ -81,12 +94,12 @@ const DownloadButton = styled.button`
   align-items: center;
   gap: 0.25rem;
   padding: 0.35rem 0.75rem;
-  border: 1px solid #cbd5e1;
+  border: 1px solid #c7d2fe;
   border-radius: 6px;
   font-size: 0.75rem;
   font-weight: 600;
   background: white;
-  color: #64748b;
+  color: #667eea;
   cursor: pointer;
   transition: all 120ms ease;
 
@@ -174,6 +187,77 @@ const DownloadFeedbackText = styled.div<{ $status: DownloadFeedbackStatus }>`
   }};
 `;
 
+const ExpandedRow = styled.tr`
+  background: #fefefe;
+`;
+
+const ExpandedCell = styled.td`
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+`;
+
+const ChartContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+`;
+
+const ChartHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+`;
+
+const ChartTitle = styled.div`
+  font-weight: 600;
+  color: #0f172a;
+`;
+
+const ChartSubtitle = styled.div`
+  font-size: 0.75rem;
+  color: #475569;
+`;
+
+const ChartStats = styled.div`
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  color: #475569;
+`;
+
+const StatBadge = styled.span`
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: #e0e7ff;
+  color: #312e81;
+  font-weight: 600;
+`;
+
+const ChartWrapper = styled.div`
+  width: 100%;
+  height: 220px;
+`;
+
+const spin = keyframes`
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+`;
+
+const SpinnerIcon = styled(Loader2)`
+  animation: ${spin} 1s linear infinite;
+`;
+
 export function DataReadinessPage() {
   const [dataCoverage, setDataCoverage] = useState<StockDataCoverage[]>([]);
   const [splitHistory, setSplitHistory] = useState<SplitHistory[]>([]);
@@ -183,6 +267,8 @@ export function DataReadinessPage() {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [bulkState, setBulkState] = useState<BulkDownloadState>(bulkDownloadManager.getState());
   const [downloadFeedback, setDownloadFeedback] = useState<Record<string, { status: DownloadFeedbackStatus; message: string }>>({});
+  const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
+  const [seriesState, setSeriesState] = useState<Record<string, { loading: boolean; data?: PriceRecord[]; error?: string }>>({});
   const feedbackTimeouts = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevBulkRunningRef = useRef<boolean>(bulkState.running);
@@ -277,12 +363,10 @@ export function DataReadinessPage() {
     if (isTickerUpToDate(ticker)) {
       setFeedback(
         ticker,
-        { status: 'success', message: 'Already up to date' },
+        { status: 'pending', message: 'Forcing refresh…' },
         true
       );
-      return;
     }
-
     try {
       setDownloading(prev => new Set(prev).add(ticker));
       setFeedback(ticker, { status: 'pending', message: 'Starting download…' });
@@ -374,6 +458,78 @@ export function DataReadinessPage() {
     bulkDownloadManager.stop();
   }, []);
 
+  const handleRowClick = async (item: StockDataCoverage) => {
+    const ticker = item.ticker;
+    if (expandedTicker === ticker) {
+      setExpandedTicker(null);
+      return;
+    }
+
+    setExpandedTicker(ticker);
+
+    const existing = seriesState[ticker];
+    if (existing?.data || existing?.loading) {
+      return;
+    }
+
+    setSeriesState(prev => ({
+      ...prev,
+      [ticker]: { loading: true },
+    }));
+
+    try {
+      const prices = await priceDataService.getPricesForSymbol(ticker);
+      setSeriesState(prev => ({
+        ...prev,
+        [ticker]: { loading: false, data: prices },
+      }));
+    } catch (error) {
+      console.error('Failed to load price series:', error);
+      setSeriesState(prev => ({
+        ...prev,
+        [ticker]: { loading: false, error: 'Failed to load chart data' },
+      }));
+    }
+  };
+
+  const buildChartInfo = (records: PriceRecord[] | undefined) => {
+    if (!records || records.length === 0) return null;
+    const sorted = [...records].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+    const MAX_POINTS = 240;
+    const slice = sorted.length > MAX_POINTS ? sorted.slice(-MAX_POINTS) : sorted;
+    if (slice.length === 0) return null;
+
+    const values = slice.map(r => r.close);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const latest = slice[slice.length - 1].close;
+    const startDate = slice[0].date;
+    const endDate = slice[slice.length - 1].date;
+
+    const data = slice.map(record => ({
+      date: record.date,
+      close: record.close,
+    }));
+
+    return { data, min, max, latest, startDate, endDate, count: slice.length };
+  };
+
+  const formatPrice = (value: number | null | undefined, digits = 2) =>
+    value !== null && value !== undefined
+      ? Number(value).toFixed(digits)
+      : '-';
+
+  const formatTickDate = (value: string) => {
+    if (!value) return '';
+    const parts = value.split('-');
+    if (parts.length === 3) {
+      return `${parts[1]}/${parts[2]}`;
+    }
+    return value;
+  };
+
   const bulkStatusLabel = bulkState.running
     ? 'Bulk download in progress'
     : bulkState.stopped
@@ -436,23 +592,13 @@ export function DataReadinessPage() {
     return sortDirection === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />;
   };
 
-  if (loading) {
-    return (
-      <Container>
-        <Card>
-          <EmptyState>Loading data coverage...</EmptyState>
-        </Card>
-      </Container>
-    );
-  }
-
   return (
     <Container>
       <Header>
-        <Meta>Historical Data</Meta>
-        <Title>Data Readiness</Title>
+        <Meta>Historical Stock Data</Meta>
+        <Title>Historical Stock Data</Title>
         <Description>
-          Manage historical price and split data for all stocks (last 15 years)
+          Download and monitor 15 years of stock prices & splits across all tracked tickers.
         </Description>
       </Header>
 
@@ -518,7 +664,15 @@ export function DataReadinessPage() {
                 </tr>
               </Thead>
               <Tbody>
-                {sortedData.length === 0 ? (
+                {loading ? (
+                  <tr>
+                    <Td colSpan={8}>
+                      <EmptyState>
+                        <SpinnerIcon size={18} /> Loading stock coverage...
+                      </EmptyState>
+                    </Td>
+                  </tr>
+                ) : sortedData.length === 0 ? (
                   <tr>
                     <Td colSpan={8}>
                       <EmptyState>No transaction data found</EmptyState>
@@ -531,56 +685,145 @@ export function DataReadinessPage() {
                     const isDownloading = downloading.has(item.ticker);
                     const bulkStatus = getBulkStatusForTicker(item.ticker);
                     const feedback = downloadFeedback[item.ticker];
+                    const isExpanded = expandedTicker === item.ticker;
+                    const series = seriesState[item.ticker];
+                    const chartInfo = buildChartInfo(series?.data);
 
                     return (
-                      <Tr key={item.ticker}>
-                        <Td style={{ fontWeight: 600 }}>{item.ticker}</Td>
-                        <Td>{item.exchange}</Td>
-                        <Td>{item.currency}</Td>
-                        <Td style={{ textAlign: 'center' }}>
-                          <IconCell>
-                            {hasPrices ? (
-                              <Check size={18} color="#16a34a" />
-                            ) : (
-                              <X size={18} color="#dc2626" />
+                      <Fragment key={item.ticker}>
+                        <Tr
+                          $clickable
+                          aria-expanded={isExpanded}
+                          onClick={() => handleRowClick(item)}
+                        >
+                          <Td style={{ fontWeight: 600 }}>{item.ticker}</Td>
+                          <Td>{item.exchange}</Td>
+                          <Td>{item.currency}</Td>
+                          <Td style={{ textAlign: 'center' }}>
+                            <IconCell>
+                              {hasPrices ? (
+                                <Check size={18} color="#16a34a" />
+                              ) : (
+                                <X size={18} color="#dc2626" />
+                              )}
+                            </IconCell>
+                          </Td>
+                          <Td style={{ textAlign: 'center' }}>
+                            <IconCell>
+                              {hasSplits ? (
+                                <Check size={18} color="#16a34a" />
+                              ) : (
+                                <X size={18} color="#94a3b8" />
+                              )}
+                            </IconCell>
+                          </Td>
+                          <Td style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                            {item.earliestPrice && item.latestPrice
+                              ? `${item.earliestPrice} to ${item.latestPrice}`
+                              : '-'}
+                          </Td>
+                          <Td style={{ textAlign: 'center' }}>
+                            <DownloadButton
+                              onClick={event => {
+                                event.stopPropagation();
+                                handleDownloadTicker(item.ticker);
+                              }}
+                              disabled={isDownloading || Boolean(bulkStatus)}
+                            >
+                              <Download size={14} />
+                              {isDownloading
+                                ? 'Downloading...'
+                                : bulkStatus === 'running'
+                                  ? 'Bulk running...'
+                                  : bulkStatus === 'queued'
+                                    ? 'Queued...'
+                                    : 'Download'}
+                            </DownloadButton>
+                            {feedback && (
+                              <DownloadFeedbackText $status={feedback.status}>
+                                {feedback.message}
+                              </DownloadFeedbackText>
                             )}
-                          </IconCell>
-                        </Td>
-                        <Td style={{ textAlign: 'center' }}>
-                          <IconCell>
-                            {hasSplits ? (
-                              <Check size={18} color="#16a34a" />
-                            ) : (
-                              <X size={18} color="#94a3b8" />
-                            )}
-                          </IconCell>
-                        </Td>
-                        <Td style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                          {item.earliestPrice && item.latestPrice
-                            ? `${item.earliestPrice} to ${item.latestPrice}`
-                            : '-'}
-                        </Td>
-                        <Td style={{ textAlign: 'center' }}>
-                          <DownloadButton
-                            onClick={() => handleDownloadTicker(item.ticker)}
-                            disabled={isDownloading || Boolean(bulkStatus)}
-                          >
-                            <Download size={14} />
-                            {isDownloading
-                              ? 'Downloading...'
-                              : bulkStatus === 'running'
-                                ? 'Bulk running...'
-                                : bulkStatus === 'queued'
-                                  ? 'Queued...'
-                                  : 'Download'}
-                          </DownloadButton>
-                          {feedback && (
-                            <DownloadFeedbackText $status={feedback.status}>
-                              {feedback.message}
-                            </DownloadFeedbackText>
-                          )}
-                        </Td>
-                      </Tr>
+                          </Td>
+                        </Tr>
+                        {isExpanded && (
+                          <ExpandedRow>
+                            <ExpandedCell colSpan={7}>
+                              {series?.loading && (
+                                <EmptyState>
+                                  <SpinnerIcon size={16} /> Loading chart...
+                                </EmptyState>
+                              )}
+                              {series?.error && (
+                                <DownloadFeedbackText $status="error">
+                                  {series.error}
+                                </DownloadFeedbackText>
+                              )}
+                              {!series?.loading && !series?.error && chartInfo && (
+                                <ChartContainer>
+                                  <ChartHeader>
+                                    <div>
+                                      <ChartTitle>{item.ticker} price history</ChartTitle>
+                                      <ChartSubtitle>
+                                        Showing last {chartInfo.count} days ({chartInfo.startDate} → {chartInfo.endDate})
+                                      </ChartSubtitle>
+                                    </div>
+                                    <ChartStats>
+                                      <StatBadge>Min: {formatPrice(chartInfo.min, 2)}</StatBadge>
+                                      <StatBadge>Max: {formatPrice(chartInfo.max, 2)}</StatBadge>
+                                      <StatBadge>Last: {formatPrice(chartInfo.latest, 2)}</StatBadge>
+                                    </ChartStats>
+                                  </ChartHeader>
+                                  <ChartWrapper>
+                                    <ResponsiveContainer width="100%" height="100%">
+                                      <AreaChart data={chartInfo.data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                                        <defs>
+                                          <linearGradient id={`priceGradient-${item.ticker}`} x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.3} />
+                                            <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
+                                          </linearGradient>
+                                        </defs>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                                        <XAxis
+                                          dataKey="date"
+                                          minTickGap={20}
+                                          tickFormatter={formatTickDate}
+                                          fontSize={10}
+                                          stroke="#94a3b8"
+                                        />
+                                        <YAxis
+                                          domain={[chartInfo.min, chartInfo.max]}
+                                          width={70}
+                                          tickFormatter={value => formatPrice(value as number, 2)}
+                                          fontSize={10}
+                                          stroke="#94a3b8"
+                                        />
+                                        <Tooltip
+                                          formatter={value => formatPrice(value as number, 4)}
+                                          labelFormatter={value => value}
+                                        />
+                                        <Area
+                                          type="monotone"
+                                          dataKey="close"
+                                          stroke="#0ea5e9"
+                                          strokeWidth={2}
+                                          fill={`url(#priceGradient-${item.ticker})`}
+                                          isAnimationActive={false}
+                                        />
+                                      </AreaChart>
+                                    </ResponsiveContainer>
+                                  </ChartWrapper>
+                                </ChartContainer>
+                              )}
+                              {!series?.loading && !series?.error && !chartInfo && (
+                                <DownloadFeedbackText $status="error">
+                                  No price history available yet.
+                                </DownloadFeedbackText>
+                              )}
+                            </ExpandedCell>
+                          </ExpandedRow>
+                        )}
+                      </Fragment>
                     );
                   })
                 )}

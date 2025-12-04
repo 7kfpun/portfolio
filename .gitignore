@@ -7,9 +7,14 @@ node_modules/
 desktop/node_modules/
 
 # Build outputs
+desktop/data/
 desktop/dist/
 desktop/dist-ssr/
 desktop/src-tauri/target/
+
+# TypeScript build info
+desktop/*.tsbuildinfo
+desktop/vite.config.js
 
 # Logs
 *.log

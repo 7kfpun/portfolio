@@ -284,7 +284,7 @@ export function HeatmapPage() {
 
   useEffect(() => {
     const loadHistoricalPrices = async () => {
-      const allPrices = await priceDataService.loadAllPrices();
+      const allPrices = await priceDataService.loadAllPrices({ latestOnly: false });
       const priceMap = new Map<string, PriceRecord[]>();
 
       for (const price of allPrices) {

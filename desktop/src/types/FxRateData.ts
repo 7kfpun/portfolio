@@ -3,6 +3,6 @@ export interface FxRateRecord {
   to_currency: string;
   date: string;
   rate: number;
-  source: 'twelve_data' | 'manual';
+  source: 'yahoo_finance' | 'manual';
   updated_at: string;
 }

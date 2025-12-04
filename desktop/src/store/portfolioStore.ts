@@ -7,7 +7,6 @@ import {
 } from '../utils/portfolioCalculations';
 import { priceService } from '../services/priceService';
 import { fxRateDataService } from '../services/fxRateDataService';
-import { fxRateService } from '../services/fxRateService';
 import { useTransactionsStore } from './transactionsStore';
 
 interface PortfolioState {
@@ -114,23 +113,6 @@ export const usePortfolioStore = create<PortfolioState>((set, get) => ({
       }
 
       set({ fxRates: rateMap });
-
-      const missingCurrencies = ['TWD', 'JPY', 'HKD'].filter(curr => !rateMap.has(curr));
-      if (missingCurrencies.length > 0) {
-        const ratePairs = missingCurrencies.map(curr => ({ from: curr, to: 'USD' }));
-        await fxRateService.getBatchRates(ratePairs);
-
-        const updatedRates = await fxRateDataService.loadAllRates();
-        const updatedMap = new Map<string, number>([['USD', 1]]);
-
-        for (const rate of updatedRates) {
-          if (rate.to_currency === 'USD') {
-            updatedMap.set(rate.from_currency, rate.rate);
-          }
-        }
-
-        set({ fxRates: updatedMap });
-      }
     } catch (error) {
       console.error('Failed to load FX rates:', error);
     }

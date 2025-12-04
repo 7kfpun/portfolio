@@ -1,5 +1,6 @@
 import { Transaction } from '../types/Transaction';
 import { Position, PortfolioSummary } from '../types/Portfolio';
+import { parseNumericString } from './csvUtils';
 
 export function calculatePositions(transactions: Transaction[]): Position[] {
   const positionMap = new Map<string, Position>();
@@ -12,10 +13,10 @@ export function calculatePositions(transactions: Transaction[]): Position[] {
     const key = `${txn.stock}_${txn.currency}`;
     const type = txn.type.toLowerCase();
 
-    const quantity = parseFloat(txn.quantity.replace(/[^0-9.-]/g, '')) || 0;
-    const price = parseFloat(txn.price.replace(/[^0-9.-]/g, '')) || 0;
-    const fees = parseFloat(txn.fees.replace(/[^0-9.-]/g, '')) || 0;
-    const splitRatio = parseFloat(txn.split_ratio.replace(/[^0-9.-]/g, '')) || 1;
+    const quantity = parseNumericString(txn.quantity, 0);
+    const price = parseNumericString(txn.price, 0);
+    const fees = parseNumericString(txn.fees, 0);
+    const splitRatio = parseNumericString(txn.split_ratio, 1);
 
     if (!positionMap.has(key)) {
       positionMap.set(key, {

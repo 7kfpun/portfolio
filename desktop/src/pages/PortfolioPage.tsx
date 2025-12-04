@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import styled from 'styled-components';
 import { usePortfolioStore } from '../store/portfolioStore';
 import { useTransactionsStore } from '../store/transactionsStore';
@@ -10,7 +10,7 @@ import { priceDataService } from '../services/priceDataService';
 import { priceService } from '../services/priceService';
 import { PriceRecord } from '../types/PriceData';
 import {
-  RefreshCw,
+  Activity,
   TrendingUp,
   TrendingDown,
   DollarSign,
@@ -167,6 +167,13 @@ const StatValue = styled.div<{ $color?: string }>`
   color: ${props => props.$color || '#0f172a'};
 `;
 
+const StatMetaValue = styled.div<{ $color?: string }>`
+  font-size: 0.9rem;
+  color: ${props => props.$color || '#475569'};
+  font-weight: 600;
+  margin-top: 0.35rem;
+`;
+
 const PositionsTable = styled.div`
   overflow-x: auto;
 `;
@@ -301,31 +308,6 @@ const DonutChart = styled.div<{ $gradient: string }>`
   }
 `;
 
-const DonutCenter = styled.div`
-  position: absolute;
-  inset: 32px;
-  border-radius: 50%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  pointer-events: none;
-`;
-
-const DonutLabel = styled.span`
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  color: #94a3b8;
-  letter-spacing: 0.08em;
-`;
-
-const DonutValue = styled.span`
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #0f172a;
-`;
-
 const ChartLegend = styled.div`
   flex: 1;
   min-width: 200px;
@@ -337,7 +319,7 @@ const ChartLegend = styled.div`
 const ChartLegendItem = styled.div`
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  gap: 0.75rem;
   border-bottom: 1px solid #e2e8f0;
   padding-bottom: 0.5rem;
 
@@ -369,10 +351,24 @@ const LegendValue = styled.span`
   color: #0f172a;
 `;
 
+const LegendMetric = styled.div`
+  text-align: right;
+  min-width: 140px;
+`;
+
 const LegendPercent = styled.span`
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: #94a3b8;
-  margin-left: 0.5rem;
+  letter-spacing: 0.04em;
+  display: block;
+  margin-top: 0.1rem;
+`;
+
+const LegendSubValue = styled.div`
+  font-size: 0.78rem;
+  color: #94a3b8;
+  font-weight: 500;
+  margin-top: 0.1rem;
 `;
 
 const normalizeSymbol = (symbol: string): string => symbol.trim().toUpperCase();
@@ -426,6 +422,9 @@ const BarValue = styled.div`
   font-variant-numeric: tabular-nums;
   color: #475569;
   min-width: 100px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
 `;
 
 const BarTrack = styled.div`
@@ -460,6 +459,17 @@ const FilterHeader = styled.div`
   text-transform: uppercase;
   letter-spacing: 0.08em;
   margin-bottom: 0.25rem;
+`;
+
+const BarSubValue = styled.span`
+  font-size: 0.75rem;
+  color: #94a3b8;
+`;
+
+const GainSubValue = styled.span`
+  display: block;
+  font-size: 0.75rem;
+  color: #cbd5f5;
 `;
 
 const FilterInput = styled.input`
@@ -630,6 +640,7 @@ export function PortfolioPage() {
   const historyLogRef = useRef<Set<string>>(new Set());
 
   const settings = useSettingsStore(state => state.settings);
+  const updateSettings = useSettingsStore(state => state.updateSettings);
   const earliestTransactionDate = useMemo(() => {
     if (transactions.length === 0) return null;
     const earliestTime = transactions.reduce((min, txn) => {
@@ -674,6 +685,16 @@ export function PortfolioPage() {
     setBaseCurrency(settings.baseCurrency);
   }, [settings.baseCurrency]);
 
+  const handleBaseCurrencyChange = useCallback(
+    (currency: CurrencyType) => {
+      setBaseCurrency(currency);
+      updateSettings({ ...settings, baseCurrency: currency }).catch(error => {
+        console.error('Failed to save base currency:', error);
+      });
+    },
+    [settings, updateSettings]
+  );
+
   useEffect(() => {
     if (transactions.length === 0) {
       loadTransactions();
@@ -694,7 +715,7 @@ export function PortfolioPage() {
       }
 
       try {
-        const allPrices = await priceDataService.loadAllPrices();
+        const allPrices = await priceDataService.loadAllPrices({ latestOnly: false });
         if (cancelled) return;
 
         setHistoricalPrices(buildPriceMap(allPrices));
@@ -826,25 +847,40 @@ export function PortfolioPage() {
     const perShareChange = latestPrice - previousPrice;
     const amount = perShareChange * position.shares;
     const percent = (perShareChange / previousPrice) * 100;
+    const previousValue = previousPrice * position.shares;
 
-    return { amount, percent };
+    return { amount, percent, previousValue };
   };
 
-  const dailyPortfolioGainLossUSD = useMemo(() => {
-    if (positions.length === 0) return null;
-    let total = 0;
+  const dailyPortfolioChange = useMemo(() => {
+    if (positions.length === 0) return { amountUSD: null, percent: null as number | null };
+    let totalUSD = 0;
+    let previousTotalUSD = 0;
     let hasData = false;
 
     positions.forEach(position => {
-      const { amount } = getDailyChange(position);
+      const { amount, previousValue } = getDailyChange(position);
       if (amount !== undefined) {
+        totalUSD += convertToUSD(amount, position.currency);
         hasData = true;
-        total += convertToUSD(amount, position.currency);
+      }
+      if (previousValue !== undefined) {
+        previousTotalUSD += convertToUSD(previousValue, position.currency);
       }
     });
 
-    return hasData ? total : null;
+    if (!hasData) {
+      return { amountUSD: null, percent: null };
+    }
+
+    const percent =
+      previousTotalUSD > 0 ? (totalUSD / previousTotalUSD) * 100 : null;
+
+    return { amountUSD: totalUSD, percent };
   }, [positions, historicalPrices, fxRates]);
+
+  const dailyPortfolioGainLossUSD = dailyPortfolioChange.amountUSD;
+  const dailyPortfolioGainLossPercent = dailyPortfolioChange.percent;
 
   const dailyPortfolioGainLossBase = useMemo(() => {
     if (dailyPortfolioGainLossUSD === null) {
@@ -920,9 +956,15 @@ export function PortfolioPage() {
     }
 
     if (gainFilter === 'gainers') {
-      result = result.filter(position => (position.gainLoss ?? 0) > 0);
+      result = result.filter(position => {
+        const { amount } = getDailyChange(position);
+        return (amount ?? 0) > 0;
+      });
     } else if (gainFilter === 'losers') {
-      result = result.filter(position => (position.gainLoss ?? 0) < 0);
+      result = result.filter(position => {
+        const { amount } = getDailyChange(position);
+        return (amount ?? 0) < 0;
+      });
     }
 
     const sorted = [...result].sort((a, b) => {
@@ -944,21 +986,24 @@ export function PortfolioPage() {
   const allocationData = useMemo(() => {
     if (!summary || fxRates.size === 0) return [];
 
-    const currencyValuesUSD = Object.entries(summary.byCurrency).map(([currency, data]) => ({
-      currency,
-      originalValue: data.value,
-      valueUSD: convertToUSD(data.value, currency),
-    }));
+    const currencyValues = Object.entries(summary.byCurrency).map(([currency, data]) => {
+      const valueInBase = convertToBaseCurrency(data.value, currency, baseCurrency);
+      return {
+        currency,
+        originalValue: data.value,
+        valueInBase,
+      };
+    });
 
-    const totalValueUSD = currencyValuesUSD.reduce((sum, item) => sum + item.valueUSD, 0);
+    const totalValueBase = currencyValues.reduce((sum, item) => sum + item.valueInBase, 0);
 
-    return currencyValuesUSD.map(item => ({
+    return currencyValues.map(item => ({
       currency: item.currency,
       value: item.originalValue,
-      valueUSD: item.valueUSD,
-      percent: totalValueUSD > 0 ? (item.valueUSD / totalValueUSD) * 100 : 0,
+      valueInBase: item.valueInBase,
+      percent: totalValueBase > 0 ? (item.valueInBase / totalValueBase) * 100 : 0,
     }));
-  }, [summary, fxRates]);
+  }, [summary, fxRates, baseCurrency]);
 
   const allocationGradient = useMemo(() => {
     if (allocationData.length === 0) {
@@ -976,23 +1021,29 @@ export function PortfolioPage() {
     return segments.join(', ');
   }, [allocationData]);
 
-  const topPositions = useMemo(() => {
+  type PositionWithBase = Position & { baseValue: number };
+
+  const topPositions = useMemo<PositionWithBase[]>(() => {
     if (fxRates.size === 0) return [];
-    const sorted = [...positions].sort((a, b) => {
-      const aValue = convertToBaseCurrency(a.currentValue ?? a.totalCost, a.currency, baseCurrency);
-      const bValue = convertToBaseCurrency(b.currentValue ?? b.totalCost, b.currency, baseCurrency);
-      return bValue - aValue;
+    const withBase = positions.map(position => {
+      const baseValue = convertToBaseCurrency(
+        position.currentValue ?? position.totalCost,
+        position.currency,
+        baseCurrency
+      );
+      return { ...position, baseValue } as PositionWithBase;
     });
-    return sorted.slice(0, 5);
+
+    return withBase
+      .sort((a, b) => b.baseValue - a.baseValue)
+      .slice(0, 5);
   }, [positions, fxRates, baseCurrency]);
 
   const maxTopValue = useMemo(() => {
     if (topPositions.length === 0) return 1;
-    const values = topPositions.map(position =>
-      convertToBaseCurrency(position.currentValue ?? position.totalCost, position.currency, baseCurrency)
-    );
+    const values = topPositions.map(position => position.baseValue);
     return Math.max(1, ...values);
-  }, [topPositions, baseCurrency, fxRates]);
+  }, [topPositions]);
 
   const totalsInBaseCurrency = useMemo(() => {
     if (!summary) {
@@ -1060,7 +1111,7 @@ export function PortfolioPage() {
           </Description>
         </HeaderLeft>
         <HeaderRight>
-          <CurrencySelector value={baseCurrency} onChange={setBaseCurrency} />
+          <CurrencySelector value={baseCurrency} onChange={handleBaseCurrencyChange} />
           <PrivacyToggleButton
             type="button"
             onClick={() => setPrivacyMode(prev => !prev)}
@@ -1113,7 +1164,7 @@ export function PortfolioPage() {
 
         <StatCard $variant={dailyGainLossVariant}>
           <StatHeader>
-            <RefreshCw size={20} color="#0ea5e9" />
+            <Activity size={20} color="#0ea5e9" />
             <StatLabel>Daily Gain/Loss ({baseCurrency})</StatLabel>
           </StatHeader>
           <StatValue
@@ -1128,12 +1179,18 @@ export function PortfolioPage() {
             {dailyPortfolioGainLossBase === null
               ? '—'
               : formatSignedCurrency(dailyPortfolioGainLossBase, baseCurrency)}
-            {dailyPortfolioGainLossUSD !== null && baseCurrency !== 'USD' && (
-              <div style={{ fontSize: '0.8rem', color: '#475569' }}>
-                ({formatSignedCurrency(dailyPortfolioGainLossUSD, 'USD')})
-              </div>
-            )}
           </StatValue>
+          {dailyPortfolioGainLossPercent !== null && (
+            <StatMetaValue
+              $color={dailyPortfolioGainLossPercent >= 0 ? '#16a34a' : '#dc2626'}
+            >
+              {dailyPortfolioGainLossPercent >= 0 ? '+' : ''}
+              {dailyPortfolioGainLossPercent.toFixed(2)}%
+            </StatMetaValue>
+          )}
+          {dailyPortfolioGainLossUSD !== null && baseCurrency !== 'USD' && (
+            <StatMetaValue>({formatSignedCurrency(dailyPortfolioGainLossUSD, 'USD')})</StatMetaValue>
+          )}
         </StatCard>
       </Stats>
 
@@ -1149,12 +1206,6 @@ export function PortfolioPage() {
             <ChartContent>
               <div style={{ position: 'relative' }}>
                 <DonutChart $gradient={allocationGradient || ''}>
-                  <DonutCenter>
-                    <DonutLabel>Total Value</DonutLabel>
-                    <DonutValue>
-                      {displayCurrencyValue(summary.totalValue, 'USD')}
-                    </DonutValue>
-                  </DonutCenter>
                 </DonutChart>
               </div>
               <ChartLegend>
@@ -1163,10 +1214,17 @@ export function PortfolioPage() {
                     <LegendBadge $color={getCurrencyColor(item.currency)}>
                       {item.currency}
                     </LegendBadge>
-                    <div>
-                      <LegendValue>{displayCurrencyValue(item.value, item.currency)}</LegendValue>
+                    <LegendMetric>
+                      <LegendValue>
+                        {displayCurrencyValue(item.value, item.currency)}
+                      </LegendValue>
+                      {item.currency !== baseCurrency && (
+                        <LegendSubValue>
+                          {displayCurrencyValue(item.valueInBase, baseCurrency)}
+                        </LegendSubValue>
+                      )}
                       <LegendPercent>{item.percent.toFixed(1)}%</LegendPercent>
-                    </div>
+                    </LegendMetric>
                   </ChartLegendItem>
                 ))}
               </ChartLegend>
@@ -1183,17 +1241,18 @@ export function PortfolioPage() {
           ) : (
             <BarsList>
               {topPositions.map(position => {
-                const value = convertToBaseCurrency(
-                  position.currentValue ?? position.totalCost,
-                  position.currency,
-                  baseCurrency
-                );
-                const percent = Math.max(4, (value / maxTopValue) * 100);
+                const localValue = position.currentValue ?? position.totalCost;
+                const percent = Math.max(4, (position.baseValue / maxTopValue) * 100);
                 return (
                   <BarRow key={position.stock}>
                     <BarLabel>{position.stock}</BarLabel>
                     <BarValue>
-                      {displayCurrencyValue(value, baseCurrency)}
+                      {displayCurrencyValue(localValue, position.currency)}
+                      {position.currency !== baseCurrency && (
+                        <BarSubValue>
+                          {displayCurrencyValue(position.baseValue, baseCurrency)}
+                        </BarSubValue>
+                      )}
                     </BarValue>
                     <BarTrack>
                       <BarFill
@@ -1203,9 +1262,18 @@ export function PortfolioPage() {
                     </BarTrack>
                     {position.gainLoss !== undefined && (
                       <GainLoss $positive={position.gainLoss >= 0}>
-                        {formatSignedCurrency(
-                          convertToBaseCurrency(position.gainLoss, position.currency, baseCurrency),
-                          baseCurrency
+                        {formatSignedCurrency(position.gainLoss, position.currency)}
+                        {position.currency !== baseCurrency && (
+                          <GainSubValue>
+                            {formatSignedCurrency(
+                              convertToBaseCurrency(
+                                position.gainLoss,
+                                position.currency,
+                                baseCurrency
+                              ),
+                              baseCurrency
+                            )}
+                          </GainSubValue>
                         )}
                       </GainLoss>
                     )}

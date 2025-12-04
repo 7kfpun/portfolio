@@ -6,7 +6,7 @@ export interface PriceRecord {
   high?: number;
   low?: number;
   volume?: number;
-  source: 'twelve_data' | 'massive' | 'manual' | 'yahoo_finance';
+  source: 'manual' | 'yahoo_finance';
   updated_at: string;
 }
 

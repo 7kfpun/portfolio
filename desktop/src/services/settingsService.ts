@@ -21,41 +21,15 @@ export class SettingsService {
     }
   }
 
-  async getTwelveDataApiKey(): Promise<string> {
-    return await this.getSetting('apiKeyTwelveData');
-  }
-
-  async getMassiveApiKey(): Promise<string> {
-    return await this.getSetting('apiKeyMassive');
-  }
-
-  async saveTwelveDataApiKey(apiKey: string): Promise<void> {
-    await this.setSetting('apiKeyTwelveData', apiKey);
-  }
-
-  async saveMassiveApiKey(apiKey: string): Promise<void> {
-    await this.setSetting('apiKeyMassive', apiKey);
-  }
-
   async loadSettings(): Promise<AppSettings> {
-    const [twelveData, massive, baseCurrency] = await Promise.all([
-      this.getSetting('apiKeyTwelveData'),
-      this.getSetting('apiKeyMassive'),
-      this.getSetting('baseCurrency'),
-    ]);
+    const baseCurrency = await this.getSetting('baseCurrency');
     return {
-      apiKeyTwelveData: twelveData,
-      apiKeyMassive: massive,
       baseCurrency: (baseCurrency as 'USD' | 'TWD' | 'JPY' | 'HKD') || 'USD',
     };
   }
 
   async saveSettings(settings: AppSettings): Promise<void> {
-    await Promise.all([
-      this.setSetting('apiKeyTwelveData', settings.apiKeyTwelveData),
-      this.setSetting('apiKeyMassive', settings.apiKeyMassive),
-      this.setSetting('baseCurrency', settings.baseCurrency),
-    ]);
+    await this.setSetting('baseCurrency', settings.baseCurrency);
   }
 }
 

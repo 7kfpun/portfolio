@@ -1,55 +1,57 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { FxRateRecord } from '../types/FxRateData';
-import { parseNumber, parseCSV, toCSV } from '../utils/csvUtils';
-
-const FX_RATES_CSV = 'fx_rates.csv';
-
-interface FxRateCSVRow {
-  from_currency: string;
-  to_currency: string;
-  date: string;
-  rate: string;
-  source?: string;
-  updated_at?: string;
-}
+import { parseNumber } from '../utils/csvUtils';
 
 export class FxRateDataService {
   private parseFxRateCSV(csvContent: string): FxRateRecord[] {
-    const rows = parseCSV<FxRateCSVRow>(csvContent);
+    if (!csvContent || !csvContent.trim()) {
+      return [];
+    }
+
+    const lines = csvContent.trim().split('\n');
     const records: FxRateRecord[] = [];
 
-    for (const row of rows) {
-      const parsedRate = parseNumber(row.rate);
-      if (parsedRate === undefined) continue;
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
 
-      records.push({
-        from_currency: row.from_currency,
-        to_currency: row.to_currency,
-        date: row.date,
-        rate: parsedRate,
-        source: (row.source as any) || 'twelve_data',
-        updated_at: row.updated_at || new Date().toISOString(),
-      });
+      const fields = line.split(',');
+      if (fields.length >= 4) {
+        const parsedRate = parseNumber(fields[3]);
+        if (parsedRate === undefined) continue;
+
+        records.push({
+          from_currency: fields[0],
+          to_currency: fields[1],
+          date: fields[2],
+          rate: parsedRate,
+          source: (fields[4] === 'manual' ? 'manual' : 'yahoo_finance') as 'yahoo_finance' | 'manual',
+          updated_at: fields[5] || new Date().toISOString(),
+        });
+      }
     }
 
     return records;
   }
 
-  private toFxRateCSV(records: FxRateRecord[]): string {
-    return toCSV(records, [
-      'from_currency',
-      'to_currency',
-      'date',
-      'rate',
-      'source',
-      'updated_at',
-    ]);
-  }
-
-  async loadAllRates(): Promise<FxRateRecord[]> {
+  async loadAllRates(options?: { latestOnly?: boolean }): Promise<FxRateRecord[]> {
+    const useLatest = options?.latestOnly !== false;
     try {
-      const content = await invoke<string>('read_data_csv', { filename: FX_RATES_CSV });
-      return this.parseFxRateCSV(content);
+      let pairs: string[] = [];
+      try {
+        pairs = await invoke<string[]>('list_fx_rate_files');
+      } catch (err) {
+        console.error('Failed to list FX rate files:', err);
+        return [];
+      }
+      const allRecords: FxRateRecord[] = [];
+
+      for (const pair of pairs) {
+        const records = await this.loadRatesForPair(pair, { latestOnly: useLatest });
+        allRecords.push(...records);
+      }
+
+      return allRecords;
     } catch (error) {
       console.error('Failed to load FX rates:', error);
       return [];
@@ -57,72 +59,130 @@ export class FxRateDataService {
   }
 
   async getRateByDate(fromCurrency: string, toCurrency: string, date: string): Promise<FxRateRecord | null> {
-    const rates = await this.loadAllRates();
-    return rates.find(r =>
-      r.from_currency === fromCurrency &&
-      r.to_currency === toCurrency &&
-      r.date === date
-    ) || null;
+    const pair = `${fromCurrency}/${toCurrency}`;
+    const rates = await this.loadRatesForPair(pair, { latestOnly: false });
+    return (
+      rates.find(
+        r =>
+          r.from_currency === fromCurrency &&
+          r.to_currency === toCurrency &&
+          r.date === date
+      ) || null
+    );
   }
 
   async getLatestRate(fromCurrency: string, toCurrency: string): Promise<FxRateRecord | null> {
-    const rates = await this.loadAllRates();
-    const filteredRates = rates
-      .filter(r => r.from_currency === fromCurrency && r.to_currency === toCurrency)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-    return filteredRates[0] || null;
+    const pair = `${fromCurrency}/${toCurrency}`;
+    const rates = await this.loadRatesForPair(pair);
+    const sorted = rates.sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+    return sorted[0] || null;
   }
 
   async saveRates(newRates: FxRateRecord[]): Promise<void> {
     try {
-      const existing = await this.loadAllRates();
-      const rateMap = new Map<string, FxRateRecord>();
-
-      for (const rate of existing) {
-        const key = `${rate.from_currency}_${rate.to_currency}_${rate.date}`;
-        rateMap.set(key, rate);
-      }
-
+      // Group by currency pair
+      const grouped = new Map<string, FxRateRecord[]>();
       for (const rate of newRates) {
-        const key = `${rate.from_currency}_${rate.to_currency}_${rate.date}`;
-        rateMap.set(key, rate);
+        const pair = `${rate.from_currency}/${rate.to_currency}`;
+        if (!grouped.has(pair)) {
+          grouped.set(pair, []);
+        }
+        grouped.get(pair)!.push(rate);
       }
 
-      const allRates = Array.from(rateMap.values()).sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-      );
+      // Save each pair
+      for (const [pair, rates] of grouped) {
+        const existing = await this.loadRatesForPair(pair, { latestOnly: false });
+        const rateMap = new Map<string, FxRateRecord>();
 
-      const csvContent = this.toFxRateCSV(allRates);
-      await invoke('write_data_csv', { filename: FX_RATES_CSV, content: csvContent });
+        for (const rate of existing) {
+          rateMap.set(rate.date, rate);
+        }
+
+        for (const rate of rates) {
+          rateMap.set(rate.date, rate);
+        }
+
+        const allRates = Array.from(rateMap.values()).sort(
+          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+        );
+
+        const csvLines = ['from_currency,to_currency,date,rate,source,updated_at'];
+        for (const rate of allRates) {
+          csvLines.push(
+            `${rate.from_currency},${rate.to_currency},${rate.date},${rate.rate},${rate.source},${rate.updated_at}`
+          );
+        }
+
+        await invoke('write_fx_rate_file', {
+          pair,
+          content: csvLines.join('\n') + '\n',
+        });
+      }
     } catch (error) {
       console.error('Failed to save FX rates:', error);
       throw error;
     }
   }
 
-  async appendRate(rate: FxRateRecord): Promise<void> {
-    try {
-      const csvRow = [
-        rate.from_currency,
-        rate.to_currency,
-        rate.date,
-        rate.rate,
-        rate.source,
-        rate.updated_at,
-      ].join(',') + '\n';
-
-      const existing = await invoke<string>('read_data_csv', { filename: FX_RATES_CSV });
-      if (!existing.trim()) {
-        const header = 'from_currency,to_currency,date,rate,source,updated_at\n';
-        await invoke('write_data_csv', { filename: FX_RATES_CSV, content: header + csvRow });
-      } else {
-        await invoke('append_data_csv', { filename: FX_RATES_CSV, content: csvRow });
+  private async readFxRateFile(
+    pair: string,
+    options?: { preferLatest?: boolean }
+  ): Promise<string> {
+    const useLatest = options?.preferLatest ?? false;
+    if (useLatest) {
+      try {
+        const content = await invoke<string>('read_fx_rate_file_head', {
+          pair,
+          lines: 8,
+        });
+        if (content && content.trim()) {
+          return content;
+        }
+      } catch (error) {
+        console.warn(`Failed to read FX rate head for ${pair}:`, error);
       }
-    } catch (error) {
-      console.error('Failed to append FX rate:', error);
-      throw error;
     }
+
+    return await invoke<string>('read_fx_rate_file', { pair });
+  }
+
+  private async loadRatesForPair(
+    pair: string,
+    options?: { latestOnly?: boolean }
+  ): Promise<FxRateRecord[]> {
+    try {
+      const content = await this.readFxRateFile(pair, {
+        preferLatest: options?.latestOnly !== false,
+      });
+      let records = this.parseFxRateCSV(content);
+
+      if (records.length === 0 && options?.latestOnly !== false) {
+        const fallbackContent = await this.readFxRateFile(pair, { preferLatest: false });
+        records = this.parseFxRateCSV(fallbackContent);
+      }
+
+      if (options?.latestOnly !== false && records.length > 0) {
+        return [records[0]];
+      }
+
+      return records;
+    } catch (error) {
+      console.error(`Failed to load FX rates for ${pair}:`, error);
+      return [];
+    }
+  }
+
+  async getRatesForPair(fromCurrency: string, toCurrency: string): Promise<FxRateRecord[]> {
+    const pair = `${fromCurrency}/${toCurrency}`;
+    const records = await this.loadRatesForPair(pair, { latestOnly: false });
+    return records.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  }
+
+  async appendRate(rate: FxRateRecord): Promise<void> {
+    await this.saveRates([rate]);
   }
 }
 
