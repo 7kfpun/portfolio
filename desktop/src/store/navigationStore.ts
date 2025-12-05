@@ -1,13 +1,17 @@
 import { create } from 'zustand';
 
-export type PageType = 'portfolio' | 'transactions' | 'heatmap' | 'settings';
+export type PageType = 'portfolio' | 'transactions' | 'heatmap' | 'settings' | 'stock-detail';
 
 interface NavigationState {
   currentPage: PageType;
-  setCurrentPage: (page: PageType) => void;
+  selectedStock: string | null;
+  setCurrentPage: (page: PageType, stock?: string) => void;
+  goBackToPortfolio: () => void;
 }
 
 export const useNavigationStore = create<NavigationState>((set) => ({
   currentPage: 'portfolio',
-  setCurrentPage: (page) => set({ currentPage: page }),
+  selectedStock: null,
+  setCurrentPage: (page, stock) => set({ currentPage: page, selectedStock: stock || null }),
+  goBackToPortfolio: () => set({ currentPage: 'portfolio', selectedStock: null }),
 }));

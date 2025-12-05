@@ -3,6 +3,7 @@ import styled from 'styled-components';
 import { usePortfolioStore } from '../store/portfolioStore';
 import { useTransactionsStore } from '../store/transactionsStore';
 import { useSettingsStore } from '../store/settingsStore';
+import { useNavigationStore } from '../store/navigationStore';
 import { Position } from '../types/Portfolio';
 import { CurrencyType } from '../types/Settings';
 import { CurrencySelector } from '../components/CurrencySelector';
@@ -641,6 +642,9 @@ export function PortfolioPage() {
 
   const settings = useSettingsStore(state => state.settings);
   const updateSettings = useSettingsStore(state => state.updateSettings);
+
+  const setCurrentPage = useNavigationStore(state => state.setCurrentPage);
+
   const earliestTransactionDate = useMemo(() => {
     if (transactions.length === 0) return null;
     const earliestTime = transactions.reduce((min, txn) => {
@@ -1447,7 +1451,11 @@ export function PortfolioPage() {
                     : undefined;
 
                   return (
-                  <tr key={`${position.stock}-${index}`}>
+                  <tr
+                    key={`${position.stock}-${index}`}
+                    onClick={() => setCurrentPage('stock-detail', position.stock)}
+                    style={{ cursor: 'pointer' }}
+                  >
                     <Td>{position.stock}</Td>
                     <CurrencyCell>
                       <CurrencyBadge $color={getCurrencyColor(position.currency)}>

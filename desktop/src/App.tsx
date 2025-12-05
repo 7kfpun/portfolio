@@ -4,6 +4,7 @@ import { PortfolioPage } from './pages/PortfolioPage';
 import { TransactionsPage } from './pages/TransactionsPage';
 import { HeatmapPage } from './pages/HeatmapPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { StockDetailPage } from './pages/StockDetailPage';
 import { useNavigationStore } from './store/navigationStore';
 
 const Screen = styled.main`
@@ -22,12 +23,13 @@ function App() {
 
   return (
     <Screen>
-      <Navigation currentPage={currentPage} onNavigate={setCurrentPage} />
+      {currentPage !== 'stock-detail' && <Navigation currentPage={currentPage} onNavigate={setCurrentPage} />}
       <Content>
         {currentPage === 'portfolio' && <PortfolioPage />}
         {currentPage === 'transactions' && <TransactionsPage />}
         {currentPage === 'heatmap' && <HeatmapPage />}
         {currentPage === 'settings' && <SettingsPage />}
+        {currentPage === 'stock-detail' && <StockDetailPage />}
       </Content>
     </Screen>
   );

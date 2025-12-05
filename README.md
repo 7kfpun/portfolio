@@ -9,15 +9,35 @@ A cross-platform desktop application for tracking and managing multi-market inve
 
 ## Features
 
-- **Multi-market support** for USD, TWD, JPY, and HKD transactions
-- **Portfolio heatmap** TradingView-style visualization with stock-level performance tracking and daily gain/loss data
-- **Currency conversion** - Select base currency and toggle to convert all portfolio values on the fly
-- **Advanced filtering** for both transactions and holdings (search, currency, type, gainers/losers, sorting)
-- **Portfolio analytics** with currency allocation donut and top-holdings bar chart
-- **Price caching** that fetches last-close data with rate limiting, exponential backoff, and CSV persistence
-- **Offline-friendly CSV storage** for transactions, prices, FX rates, securities, and settings
-- **Modern UI** powered by React, styled-components, Zustand state management, and Lucide icons
-- **Git hooks** with Husky for pre-commit linting and testing
+### 1. Portfolio Dashboard
+- Real-time holdings view with current valuations
+- Daily gain/loss tracking and filtering
+- Currency conversion to base currency
+- Interactive charts (currency allocation donut, top holdings bar)
+- Advanced sorting and filtering
+
+### 2. Portfolio Heatmap
+- TradingView-style visualization with color-coded performance
+- Cell size represents portfolio weight
+- Dual view modes (heatmap and table)
+- Daily performance tracking per position
+
+### 3. Transaction Management
+- Multi-market support (USD, TWD, JPY, HKD)
+- Transaction statistics by type and currency
+- Advanced filtering and search
+- Sortable columns
+
+### 4. Historical Data Download
+- Yahoo Finance integration for stock prices and FX rates
+- Batch processing for multiple symbols
+- Date range selection
+- Automatic CSV caching
+
+### 5. Settings
+- Base currency selection
+- CSV-based storage
+- Privacy-first design (all data local)
 
 ## Screenshots
 
@@ -144,76 +164,397 @@ npm run tauri:build # package the app for production
 
 ## Architecture
 
-### Data Flow
+### High-Level Architecture
 
+```mermaid
+graph TB
+    User[User] --> UI[React Frontend]
+    UI --> Store[Zustand Stores]
+    Store --> Services[Service Layer]
+    Services --> Tauri[Tauri Commands]
+    Services --> Yahoo[Yahoo Finance API]
+    Tauri --> CSV[CSV Files]
+    Yahoo --> Cache[CSV Cache]
+
+    style UI fill:#667eea
+    style Store fill:#764ba2
+    style Services fill:#f093fb
+    style Tauri fill:#ffc131
+    style CSV fill:#43e97b
+    style Cache fill:#43e97b
 ```
-CSV Files → Rust backend (parsing + validation) → JSON payloads → React state → UI components
-                   ↘ price cache (prices.csv) ↗
+
+### Data Flow Diagrams
+
+#### 1. Portfolio Calculation Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant PortfolioPage
+    participant portfolioStore
+    participant priceDataService
+    participant fxRateDataService
+    participant TauriBackend
+    participant CSVCache
+
+    User->>PortfolioPage: View portfolio
+    PortfolioPage->>portfolioStore: loadPositions()
+    portfolioStore->>priceDataService: getLatestPrices(symbols)
+    priceDataService->>TauriBackend: read_data_csv('prices.csv')
+    TauriBackend->>CSVCache: Read file
+    CSVCache-->>TauriBackend: CSV content
+    TauriBackend-->>priceDataService: Cached prices
+    priceDataService-->>portfolioStore: Price map
+
+    portfolioStore->>fxRateDataService: loadAllRates()
+    fxRateDataService->>TauriBackend: read_data_csv('fx_rates.csv')
+    TauriBackend->>CSVCache: Read file
+    CSVCache-->>TauriBackend: CSV content
+    TauriBackend-->>fxRateDataService: Cached rates
+    fxRateDataService-->>portfolioStore: FX rate map
+
+    portfolioStore->>portfolioStore: calculatePositions()
+    portfolioStore-->>PortfolioPage: Positions with values
+    PortfolioPage-->>User: Display portfolio
 ```
 
-- Transactions remain in the `desktop/data` folder for easy editing.
-- Price data travels through `priceService`, which now relies on a `RateLimiter` and `fetchWithBackoff` utility. Successful responses are normalized into `prices.csv` via Tauri commands, enabling offline reuse and faster reloads.
+#### 2. Historical Data Download Flow
 
-### CSV Storage Commands
+```mermaid
+sequenceDiagram
+    participant User
+    participant DataReadinessPage
+    participant historicalDataService
+    participant YahooFinance
+    participant priceDataService
+    participant TauriBackend
+    participant CSVCache
 
-| Command               | Purpose                                      |
-| --------------------- | -------------------------------------------- |
-| `read_storage_csv`    | Stream CSV content from the app data folder  |
-| `write_storage_csv`   | Overwrite/create CSV files with headers      |
-| `append_storage_csv`  | Append rows to an existing CSV               |
+    User->>DataReadinessPage: Click "Download"
+    DataReadinessPage->>historicalDataService: downloadHistoricalData(symbol, from, to)
 
-### Rate Limiting & Backoff
+    loop For each date range
+        historicalDataService->>YahooFinance: Fetch OHLC data
+        YahooFinance-->>historicalDataService: Price data
+    end
 
-`priceService` schedules every Twelve Data API call through a shared `RateLimiter` (30 req/min) and wraps each fetch in `fetchWithBackoff`. HTTP 429/5xx responses and transient network errors automatically retry with exponential backoff before surfacing to the UI, while cached prices remain available as a fallback.
+    historicalDataService->>priceDataService: savePrices(records)
+    priceDataService->>TauriBackend: read_data_csv('prices.csv')
+    TauriBackend->>CSVCache: Read existing
+    CSVCache-->>TauriBackend: Existing CSV
+    TauriBackend-->>priceDataService: Existing data
 
-## Roadmap
+    priceDataService->>priceDataService: Merge new + existing
+    priceDataService->>TauriBackend: write_data_csv('prices.csv', merged)
+    TauriBackend->>CSVCache: Write file
+    CSVCache-->>TauriBackend: Success
+    TauriBackend-->>priceDataService: Success
+    priceDataService-->>historicalDataService: Saved
+    historicalDataService-->>DataReadinessPage: Complete
+    DataReadinessPage-->>User: Show success
+```
 
-### Phase 1: Core Features ✅
-- [x] Multi-market transaction viewing
-- [x] Data table with filtering and sorting
-- [x] Portfolio holdings summary with filters & charts
-- [x] CSV storage + price caching commands
-- [x] Zustand state management migration
-- [x] Comprehensive test coverage
-- [x] Git hooks with Husky
+#### 3. Transaction Loading Flow
 
-### Phase 2: Analytics ✅
-- [x] Portfolio value calculation with FX conversion
-- [x] Currency conversion toggle for all holdings
-- [x] Portfolio heatmap with TradingView-style visualization
-- [x] Daily gain/loss tracking and table view
-- [ ] NAV tracking and benchmark comparison
-- [ ] Historical performance charts
+```mermaid
+sequenceDiagram
+    participant User
+    participant TransactionsPage
+    participant transactionsStore
+    participant transactionService
+    participant TauriBackend
+    participant DataDir
 
-### Phase 3: Advanced Features (Future)
-- [ ] Real-time price updates
-- [ ] Automated rebalancing suggestions
-- [ ] Data backup/versioning tooling
-- [ ] Mobile companions and broker integrations
+    User->>TransactionsPage: View transactions
+    TransactionsPage->>transactionsStore: loadTransactions()
+    transactionsStore->>transactionService: loadTransactions()
+    transactionService->>TauriBackend: read_csv()
 
-## Contributing
+    loop For each market CSV
+        TauriBackend->>DataDir: Read {market}_Trx.csv
+        DataDir-->>TauriBackend: CSV content
+    end
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'feat: add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+    TauriBackend-->>transactionService: [(filename, currency, csv)]
+    transactionService->>transactionService: Parse & transform
+    transactionService-->>transactionsStore: Transaction[]
+    transactionsStore-->>TransactionsPage: Transactions
+    TransactionsPage-->>User: Display table
+```
 
-Follow the conventional commit style (`feat`, `fix`, `docs`, etc.).
+### Data Management
 
-## Troubleshooting
+#### CSV File Structure
 
-- **App will not start** – confirm Node.js 22+, Rust toolchain, and Tauri prerequisites are installed.
-- **CSV files missing** – ensure files exist inside `desktop/data/` with the expected headers.
-- **Price refresh fails** – check your Twelve Data API key and rate limit status; cached prices remain available until the next successful refresh.
-- **Build issues** – try `rm -rf node_modules && npm install` and `cargo clean` inside `src-tauri`.
+**Transaction Files** (User-managed in `desktop/data/`):
+- `US_Trx.csv` - US market transactions (USD)
+- `TW_Trx.csv` - Taiwan market transactions (TWD)
+- `JP_Trx.csv` - Japan market transactions (JPY)
+- `HK_Trx.csv` - Hong Kong market transactions (HKD)
 
-## License
+**Cache Files** (Auto-managed in app data directory):
+- `prices.csv` - Historical price data with OHLC
+- `fx_rates.csv` - Currency exchange rates
+- `settings.csv` - Application preferences
 
-This project is licensed under the MIT License.
+**App Data Directory Location**:
+- macOS: `~/Library/Application Support/com.portfolio.manager/data/`
+- Windows: `C:\Users\{username}\AppData\Roaming\com.portfolio.manager\data\`
+- Linux: `~/.config/com.portfolio.manager/data/`
 
-## Support
+#### CSV Formats
 
-- Open an issue on GitHub
-- Review the detailed [requirements](requirements.md)
-- Check [CLAUDE.md](CLAUDE.md) for development guidelines
+**Transaction CSV** (`{market}_Trx.csv`):
+```csv
+date,stock,type,quantity,price,fees,split_ratio,currency
+2024-01-15,NASDAQ:AAPL,Buy,100,150.25,9.99,1.0,USD
+2024-02-20,NASDAQ:AAPL,Dividend,100,0.24,0,1.0,USD
+```
+
+**Price Cache CSV** (`prices.csv`):
+```csv
+symbol,date,close,open,high,low,volume,source,updated_at
+NASDAQ:AAPL,2024-12-02,180.25,178.50,181.00,177.80,52340100,yahoo_finance,2024-12-03T10:30:00.000Z
+TPE:2330,2024-12-02,625.00,620.00,628.00,618.00,25000000,manual,2024-12-03T10:30:15.000Z
+```
+
+**FX Rate Cache CSV** (`fx_rates.csv`):
+```csv
+from_currency,to_currency,date,rate,source,updated_at
+USD,JPY,2024-12-02,150.25,yahoo_finance,2024-12-03T10:30:00.000Z
+TWD,USD,2024-12-02,0.0312,yahoo_finance,2024-12-03T10:30:15.000Z
+```
+
+**Settings CSV** (`settings.csv`):
+```csv
+key,value
+baseCurrency,USD
+```
+
+#### Tauri Backend Commands
+
+| Command | Purpose | Input | Output |
+|---------|---------|-------|--------|
+| `read_csv()` | Load transaction files | None | `[(filename, currency, csv_content)]` |
+| `read_data_csv(filename)` | Read cache file | Filename | CSV content string |
+| `write_data_csv(filename, content)` | Write/overwrite cache | Filename, CSV content | Success/Error |
+| `append_data_csv(filename, content)` | Append to cache | Filename, CSV rows | Success/Error |
+| `get_setting(key)` | Get setting value | Setting key | Value string |
+| `set_setting(key, value)` | Save setting | Key, Value | Success/Error |
+
+#### Data Flow Patterns
+
+**Reading Data**:
+1. Service layer calls Tauri command
+2. Tauri reads CSV from filesystem
+3. Returns raw CSV string
+4. Service parses CSV (using PapaParse or manual parsing)
+5. Transforms to TypeScript types
+6. Returns to store/component
+
+**Writing Data**:
+1. Component/store calls service method
+2. Service transforms data to CSV format
+3. Service calls Tauri command with CSV string
+4. Tauri writes to filesystem
+5. Returns success/error
+6. Service propagates result
+
+**Caching Strategy**:
+- Read from cache first (instant)
+- If missing or stale, fetch from Yahoo Finance
+- Save to cache immediately after fetch
+- Merge with existing cache (don't overwrite)
+- Cache persists across app restarts
+
+### Frontend State Management (Zustand Stores)
+
+#### Store Architecture
+
+```mermaid
+graph TB
+    Pages[Pages/Components] --> PS[portfolioStore]
+    Pages --> TS[transactionsStore]
+    Pages --> SS[settingsStore]
+    Pages --> CS[currencyStore]
+    Pages --> NS[navigationStore]
+
+    PS --> TxService[transactionService]
+    PS --> PriceService[priceDataService]
+    PS --> FxService[fxRateDataService]
+    PS --> Utils[portfolioCalculations]
+
+    TS --> TxService
+    TS --> StatsUtils[transactionStats]
+
+    SS --> SettingsService[settingsService]
+
+    style PS fill:#667eea
+    style TS fill:#764ba2
+    style SS fill:#f093fb
+    style CS fill:#43e97b
+    style NS fill:#ffc131
+```
+
+#### Store Inventory
+
+| Store | Purpose | Key State | Key Actions |
+|-------|---------|-----------|-------------|
+| `portfolioStore` | Portfolio calculations & positions | `positions`, `summary`, `prices`, `fxRates` | `loadPositions()`, `loadPrices()`, `loadFxRates()` |
+| `transactionsStore` | Transaction data & stats | `transactions`, `stats`, `loading`, `error` | `loadTransactions()`, `refreshStats()` |
+| `settingsStore` | App settings | `settings` (baseCurrency), `loading`, `error` | `loadSettings()`, `updateSettings()` |
+| `currencyStore` | Currency filter state | `selectedCurrency` | `setSelectedCurrency()` |
+| `navigationStore` | Page navigation | `currentPage` | `setCurrentPage()` |
+
+#### Portfolio Store Data Flow
+
+```mermaid
+sequenceDiagram
+    participant Component
+    participant portfolioStore
+    participant transactionService
+    participant priceDataService
+    participant fxRateDataService
+    participant portfolioCalculations
+
+    Component->>portfolioStore: loadPositions()
+    portfolioStore->>portfolioStore: set loading=true
+
+    par Load Transactions
+        portfolioStore->>transactionService: loadTransactions()
+        transactionService-->>portfolioStore: transactions[]
+    and Load Prices
+        portfolioStore->>priceDataService: getLatestPrices(symbols)
+        priceDataService-->>portfolioStore: priceMap
+    and Load FX Rates
+        portfolioStore->>fxRateDataService: loadAllRates()
+        fxRateDataService-->>portfolioStore: fxRateMap
+    end
+
+    portfolioStore->>portfolioCalculations: calculatePositions(transactions, prices, fxRates)
+    portfolioCalculations-->>portfolioStore: positions[]
+
+    portfolioStore->>portfolioCalculations: calculatePortfolioSummary(positions)
+    portfolioCalculations-->>portfolioStore: summary
+
+    portfolioStore->>portfolioStore: set state { positions, summary, loading=false }
+    portfolioStore-->>Component: Updated state
+    Component->>Component: Re-render with new data
+```
+
+#### Transactions Store Data Flow
+
+```mermaid
+sequenceDiagram
+    participant Component
+    participant transactionsStore
+    participant transactionService
+    participant transactionStats
+
+    Component->>transactionsStore: loadTransactions()
+    transactionsStore->>transactionsStore: set loading=true, error=null
+
+    transactionsStore->>transactionService: loadTransactions()
+    transactionService-->>transactionsStore: transactions[]
+
+    transactionsStore->>transactionStats: calculateTransactionStats(transactions)
+    transactionStats-->>transactionsStore: stats
+
+    transactionsStore->>transactionsStore: set state { transactions, stats, loading=false }
+    transactionsStore-->>Component: Updated state
+    Component->>Component: Re-render with transactions & stats
+```
+
+#### Settings Store Data Flow
+
+```mermaid
+sequenceDiagram
+    participant Component
+    participant settingsStore
+    participant settingsService
+    participant TauriBackend
+
+    Note over Component,TauriBackend: Load Settings
+    Component->>settingsStore: loadSettings()
+    settingsStore->>settingsStore: set loading=true
+
+    settingsStore->>settingsService: loadSettings()
+    settingsService->>TauriBackend: get_setting('baseCurrency')
+    TauriBackend-->>settingsService: 'USD'
+    settingsService-->>settingsStore: { baseCurrency: 'USD' }
+
+    settingsStore->>settingsStore: set state { settings, loading=false }
+    settingsStore-->>Component: Updated state
+
+    Note over Component,TauriBackend: Update Settings
+    Component->>settingsStore: updateSettings({ baseCurrency: 'JPY' })
+
+    settingsStore->>settingsService: saveSettings({ baseCurrency: 'JPY' })
+    settingsService->>TauriBackend: set_setting('baseCurrency', 'JPY')
+    TauriBackend-->>settingsService: Success
+    settingsService-->>settingsStore: Success
+
+    settingsStore->>settingsStore: set state { settings: { baseCurrency: 'JPY' } }
+    settingsStore-->>Component: Updated state
+    Component->>Component: Re-render with new settings
+```
+
+#### Store Communication Pattern
+
+**Direct Store Access** (Components read from multiple stores):
+```typescript
+// PortfolioPage.tsx
+function PortfolioPage() {
+  // Multiple stores in one component
+  const { positions, loading } = usePortfolioStore();
+  const { settings } = useSettingsStore();
+  const { selectedCurrency } = useCurrencyStore();
+
+  // Computed values based on multiple stores
+  const filteredPositions = useMemo(() => {
+    let result = positions;
+    if (selectedCurrency !== 'All') {
+      result = result.filter(p => p.currency === selectedCurrency);
+    }
+    return result;
+  }, [positions, selectedCurrency]);
+}
+```
+
+**Store Independence** (No inter-store dependencies):
+- Each store is self-contained
+- Components orchestrate data from multiple stores
+- No store directly calls another store
+- Shared services provide data to multiple stores
+
+**State Update Flow**:
+1. User action triggers component handler
+2. Component calls store action
+3. Store sets loading state
+4. Store calls service layer
+5. Service calls Tauri backend or external API
+6. Service returns transformed data
+7. Store updates state
+8. Components re-render via Zustand subscription
+
+## Development Resources
+
+- [CLAUDE.md](CLAUDE.md) - Main development guide with architecture and patterns
+- [desktop/src/CLAUDE.md](desktop/src/CLAUDE.md) - Frontend-specific guidelines (React, Zustand, styled-components)
+- [desktop/src-tauri/CLAUDE.md](desktop/src-tauri/CLAUDE.md) - Backend-specific guidelines (Rust, Tauri commands)
+- [requirements.md](requirements.md) - Detailed project requirements
+
+## Testing
+
+78 unit tests with Vitest covering:
+- CSV utilities
+- Portfolio calculations
+- Transaction statistics
+- Service layer
+- Zustand stores
+
+Run tests:
+```bash
+npm test
+```

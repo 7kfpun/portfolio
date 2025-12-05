@@ -17,9 +17,12 @@ const DataReadinessPage = lazy(() =>
 const CurrencyDataPage = lazy(() =>
   import('./CurrencyDataPage').then(module => ({ default: module.CurrencyDataPage }))
 );
+const NavManagementPage = lazy(() =>
+  import('./NavManagementPage').then(module => ({ default: module.NavManagementPage }))
+);
 
 export function SettingsPage() {
-  const [currentPage, setCurrentPage] = useState<'keys' | 'data-readiness' | 'currency-data'>('keys');
+  const [currentPage, setCurrentPage] = useState<'keys' | 'data-readiness' | 'currency-data' | 'navs'>('keys');
 
   const renderPage = () => {
     switch (currentPage) {
@@ -29,6 +32,8 @@ export function SettingsPage() {
         return <DataReadinessPage />;
       case 'currency-data':
         return <CurrencyDataPage />;
+      case 'navs':
+        return <NavManagementPage />;
       default:
         return null;
     }

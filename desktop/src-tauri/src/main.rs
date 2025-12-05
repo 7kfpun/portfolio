@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
+use polars::io::csv::CsvWriter;
+use polars::io::SerWriter;
+use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -415,26 +418,13 @@ fn ensure_history_for_symbol(
     Ok(())
 }
 
-fn get_data_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let mut candidates = Vec::new();
-
-    candidates.push(PathBuf::from("data"));
-
-    if let Some(resource_dir) = app_handle.path_resolver().resource_dir() {
-        candidates.push(resource_dir.join("data"));
-    }
-
-    if let Some(app_dir) = app_handle.path_resolver().app_data_dir() {
-        candidates.push(app_dir.join("data"));
-    }
-
-    for dir in candidates {
-        if ensure_dir(&dir).is_ok() {
-            return Ok(dir);
-        }
-    }
-
-    Err("Unable to resolve a writable data directory".into())
+fn get_data_dir(_app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    // Always use the repo's src-tauri/data directory (relative to the Cargo manifest).
+    // This keeps a single authoritative location for price/FX/split files.
+    static DATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data");
+    let path = PathBuf::from(DATA_DIR);
+    ensure_dir(&path)?;
+    Ok(path)
 }
 
 fn get_backups_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -481,6 +471,13 @@ fn get_fx_rates_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(fx_rates_dir)
 }
 
+fn get_navs_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = get_data_dir(app_handle)?;
+    let navs_dir = data_dir.join("navs");
+    ensure_dir(&navs_dir)?;
+    Ok(navs_dir)
+}
+
 fn read_file_head(path: &Path, lines: usize) -> Result<String, String> {
     use std::fs::File;
     use std::io::{BufRead, BufReader};
@@ -517,6 +514,7 @@ fn initialize_storage(app_handle: &tauri::AppHandle) -> Result<(), String> {
     let data_dir = get_data_dir(app_handle)?;
     let _ = get_backups_dir(app_handle)?;
     let _ = get_logs_dir(app_handle)?;
+    let _ = get_navs_dir(app_handle)?;
 
     let required_files = vec![
         (data_dir.join("settings.csv"), SETTINGS_HEADER),
@@ -687,10 +685,7 @@ fn write_price_file(
 }
 
 #[tauri::command]
-fn read_price_file(
-    app_handle: tauri::AppHandle,
-    symbol: String,
-) -> Result<String, String> {
+fn read_price_file(app_handle: tauri::AppHandle, symbol: String) -> Result<String, String> {
     let prices_dir = get_prices_dir(&app_handle)?;
     let safe_symbol = symbol.replace(':', "_");
     let file_path = prices_dir.join(format!("{}.csv", safe_symbol));
@@ -754,10 +749,7 @@ fn write_split_file(
 }
 
 #[tauri::command]
-fn read_split_file(
-    app_handle: tauri::AppHandle,
-    symbol: String,
-) -> Result<String, String> {
+fn read_split_file(app_handle: tauri::AppHandle, symbol: String) -> Result<String, String> {
     let splits_dir = get_splits_dir(&app_handle)?;
     let safe_symbol = symbol.replace(':', "_");
     let file_path = splits_dir.join(format!("{}.csv", safe_symbol));
@@ -813,10 +805,7 @@ fn write_fx_rate_file(
 }
 
 #[tauri::command]
-fn read_fx_rate_file(
-    app_handle: tauri::AppHandle,
-    pair: String,
-) -> Result<String, String> {
+fn read_fx_rate_file(app_handle: tauri::AppHandle, pair: String) -> Result<String, String> {
     let fx_rates_dir = get_fx_rates_dir(&app_handle)?;
     let safe_pair = pair.replace('/', "_");
     let file_path = fx_rates_dir.join(format!("{}.csv", safe_pair));
@@ -865,7 +854,6 @@ fn list_fx_rate_files(app_handle: tauri::AppHandle) -> Result<Vec<String>, Strin
     Ok(pairs)
 }
 
-
 #[tauri::command]
 fn sync_history_once(app_handle: tauri::AppHandle) -> Result<(), String> {
     sync_full_history(&app_handle)
@@ -904,9 +892,231 @@ fn parse_f64_str(value: &str) -> Option<f64> {
     sanitized.parse::<f64>().ok()
 }
 
+fn sanitize_timestamp(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
 fn load_all_transactions(app_handle: &tauri::AppHandle) -> Result<Vec<Transaction>, String> {
     let json = read_csv(app_handle.clone())?;
     serde_json::from_str(&json).map_err(|e| format!("Failed to parse transactions JSON: {}", e))
+}
+
+#[derive(Clone)]
+struct ProcessedTransaction {
+    date: NaiveDate,
+    txn_type: String,
+    quantity: f64,
+    split_ratio: f64,
+    currency: String,
+}
+
+fn load_symbol_transactions(
+    app_handle: &tauri::AppHandle,
+    symbol: &str,
+) -> Result<Vec<ProcessedTransaction>, String> {
+    let mut all = load_all_transactions(app_handle)?;
+    all.retain(|txn| txn.stock == symbol);
+
+    if all.is_empty() {
+        return Err(format!("No transactions found for {}", symbol));
+    }
+
+    let mut processed = Vec::new();
+    for txn in all {
+        let date = NaiveDate::parse_from_str(txn.date.trim(), "%Y-%m-%d")
+            .map_err(|e| format!("Invalid transaction date {}: {}", txn.date, e))?;
+        let quantity = parse_f64_str(&txn.quantity).unwrap_or(0.0);
+        let split_ratio = if txn.split_ratio.trim().is_empty() {
+            1.0
+        } else {
+            parse_f64_str(&txn.split_ratio).unwrap_or(1.0)
+        };
+
+        processed.push(ProcessedTransaction {
+            date,
+            txn_type: txn.transaction_type.to_lowercase(),
+            quantity,
+            split_ratio: if split_ratio > 0.0 { split_ratio } else { 1.0 },
+            currency: txn.currency.clone(),
+        });
+    }
+
+    processed.sort_by_key(|t| t.date);
+    Ok(processed)
+}
+
+fn load_price_history_for_symbol(
+    app_handle: &tauri::AppHandle,
+    symbol: &str,
+) -> Result<Vec<PriceRecordEntry>, String> {
+    let prices_dir = get_prices_dir(app_handle)?;
+    let safe_symbol = symbol.replace(':', "_");
+    let path = prices_dir.join(format!("{}.csv", safe_symbol));
+
+    if !path.exists() {
+        return Err(format!("Price history not found for {}", symbol));
+    }
+
+    let mut records = Vec::new();
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(&path)
+        .map_err(|e| format!("Failed to read price file for {}: {}", symbol, e))?;
+
+    for result in reader.records() {
+        let record = result.map_err(|e| format!("Invalid price row: {}", e))?;
+        if record.len() < 2 {
+            continue;
+        }
+
+        let date = NaiveDate::parse_from_str(record.get(0).unwrap_or("").trim(), "%Y-%m-%d")
+            .map_err(|e| format!("Invalid price date for {}: {}", symbol, e))?;
+        let close = parse_f64_str(record.get(1).unwrap_or("").trim()).unwrap_or(0.0);
+        let open = record.get(2).and_then(|v| parse_f64_str(v.trim()));
+        let high = record.get(3).and_then(|v| parse_f64_str(v.trim()));
+        let low = record.get(4).and_then(|v| parse_f64_str(v.trim()));
+        let volume = record.get(5).and_then(|v| parse_f64_str(v.trim()));
+        let source = record.get(6).unwrap_or("manual").trim().to_string();
+
+        records.push(PriceRecordEntry {
+            symbol: symbol.to_string(),
+            date,
+            close,
+            open,
+            high,
+            low,
+            volume,
+            source,
+        });
+    }
+
+    if records.is_empty() {
+        return Err(format!("No closing prices available for {}", symbol));
+    }
+
+    records.sort_by_key(|r| r.date);
+
+    if let Ok(split_events) = load_split_events(app_handle, symbol) {
+        if !split_events.is_empty() {
+            for record in records.iter_mut() {
+                let mut factor = 1.0f64;
+                for (split_date, ratio) in &split_events {
+                    if record.date < *split_date {
+                        factor *= *ratio;
+                    }
+                }
+                record.close *= factor;
+                if let Some(open) = record.open.as_mut() {
+                    *open *= factor;
+                }
+                if let Some(high) = record.high.as_mut() {
+                    *high *= factor;
+                }
+                if let Some(low) = record.low.as_mut() {
+                    *low *= factor;
+                }
+            }
+        }
+    }
+
+    Ok(records)
+}
+
+fn load_split_events(
+    app_handle: &tauri::AppHandle,
+    symbol: &str,
+) -> Result<Vec<(NaiveDate, f64)>, String> {
+    let splits_dir = get_splits_dir(app_handle)?;
+    let safe_symbol = symbol.replace(':', "_");
+    let path = splits_dir.join(format!("{}.csv", safe_symbol));
+
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut events = Vec::new();
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(&path)
+        .map_err(|e| format!("Failed to read split file for {}: {}", symbol, e))?;
+
+    for result in reader.records() {
+        let record = result.map_err(|e| format!("Invalid split row: {}", e))?;
+        if record.len() < 3 {
+            continue;
+        }
+
+        let date = match NaiveDate::parse_from_str(record.get(0).unwrap_or("").trim(), "%Y-%m-%d") {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        let numerator = record
+            .get(1)
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .unwrap_or(1.0)
+            .max(1.0);
+        let denominator = record
+            .get(2)
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .unwrap_or(1.0)
+            .max(1.0);
+
+        if numerator > 0.0 && denominator > 0.0 {
+            events.push((date, numerator / denominator));
+        }
+    }
+
+    events.sort_by_key(|(date, _)| *date);
+    Ok(events)
+}
+
+fn build_position_timeline(
+    prices: &[PriceRecordEntry],
+    transactions: &[ProcessedTransaction],
+) -> Vec<(String, f64, f64)> {
+    let mut results = Vec::new();
+    if prices.is_empty() {
+        return results;
+    }
+
+    let mut idx = 0usize;
+    let mut shares = 0.0f64;
+
+    for price in prices {
+        while idx < transactions.len() && transactions[idx].date <= price.date {
+            let txn = &transactions[idx];
+            match txn.txn_type.as_str() {
+                ty if ty.starts_with("buy") || ty == "purchase" => {
+                    shares += txn.quantity;
+                }
+                ty if ty.starts_with("sell") || ty == "sale" => {
+                    shares -= txn.quantity;
+                    if shares < 0.0 {
+                        shares = 0.0;
+                    }
+                }
+                ty if ty.contains("split") => {
+                    if txn.split_ratio > 0.0 {
+                        shares *= txn.split_ratio;
+                    }
+                }
+                _ => {}
+            }
+            idx += 1;
+        }
+
+        results.push((
+            price.date.format("%Y-%m-%d").to_string(),
+            price.close,
+            shares,
+        ));
+    }
+
+    results
 }
 
 fn load_price_records(app_handle: &tauri::AppHandle) -> Result<Vec<PriceRecordEntry>, String> {
@@ -933,10 +1143,7 @@ fn load_price_records(app_handle: &tauri::AppHandle) -> Result<Vec<PriceRecordEn
             None => continue,
         };
 
-        let mut reader = match csv::ReaderBuilder::new()
-            .has_headers(true)
-            .from_path(&path)
-        {
+        let mut reader = match csv::ReaderBuilder::new().has_headers(true).from_path(&path) {
             Ok(r) => r,
             Err(_) => continue,
         };
@@ -1171,6 +1378,41 @@ struct DataReadinessStats {
     newest_date: Option<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct NavSnapshotEntryPayload {
+    stock: String,
+    currency: String,
+    shares: f64,
+    average_cost: f64,
+    latest_price: f64,
+    market_value: f64,
+    market_value_usd: f64,
+    status: String,
+    last_transaction: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct NavSnapshotPayload {
+    timestamp: String,
+    base_currency: String,
+    total_value_usd: f64,
+    entries: Vec<NavSnapshotEntryPayload>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PositionSnapshotPayload {
+    timestamp: String,
+    stock: String,
+    currency: String,
+    shares: f64,
+    average_cost: f64,
+    latest_price: f64,
+    market_value: f64,
+    market_value_usd: f64,
+    status: String,
+    last_transaction: Option<String>,
+}
+
 #[tauri::command]
 fn get_data_coverage(
     app_handle: tauri::AppHandle,
@@ -1202,8 +1444,9 @@ fn get_data_coverage(
         let (exchange, _) = get_exchange_and_symbol(&txn.stock);
         let exchange_str = exchange.unwrap_or_else(|| "UNKNOWN".to_string());
 
-        stock_map.entry(txn.stock.clone()).or_insert_with(|| {
-            StockDataCoverage {
+        stock_map
+            .entry(txn.stock.clone())
+            .or_insert_with(|| StockDataCoverage {
                 ticker: txn.stock.clone(),
                 exchange: exchange_str.clone(),
                 currency: txn.currency.clone(),
@@ -1217,8 +1460,7 @@ fn get_data_coverage(
                 last_split: None,
                 status: "missing".to_string(),
                 delist_reason: None,
-            }
-        });
+            });
 
         if let Some(coverage) = stock_map.get_mut(&txn.stock) {
             if txn.date < coverage.earliest_transaction {
@@ -1227,12 +1469,15 @@ fn get_data_coverage(
         }
     }
 
-    for (symbol, prices) in price_records.iter().fold(HashMap::new(), |mut acc, record| {
-        acc.entry(record.symbol.clone())
-            .or_insert_with(Vec::new)
-            .push(record.clone());
-        acc
-    }) {
+    for (symbol, prices) in price_records
+        .iter()
+        .fold(HashMap::new(), |mut acc, record| {
+            acc.entry(record.symbol.clone())
+                .or_insert_with(Vec::new)
+                .push(record.clone());
+            acc
+        })
+    {
         if let Some(coverage) = stock_map.get_mut(&symbol) {
             if let Some(earliest) = prices.iter().map(|p| p.date).min() {
                 coverage.earliest_price = Some(earliest.format("%Y-%m-%d").to_string());
@@ -1418,8 +1663,7 @@ fn get_split_history(app_handle: tauri::AppHandle) -> Result<String, String> {
 
     splits.sort_by(|a, b| b.date.cmp(&a.date));
 
-    serde_json::to_string(&splits)
-        .map_err(|e| format!("Failed to serialize split history: {}", e))
+    serde_json::to_string(&splits).map_err(|e| format!("Failed to serialize split history: {}", e))
 }
 
 #[tauri::command]
@@ -1442,9 +1686,10 @@ fn get_data_stats(app_handle: tauri::AppHandle) -> Result<String, String> {
         .max()
         .map(|d| d.format("%Y-%m-%d").to_string());
 
-    let coverage = serde_json::from_str::<Vec<StockDataCoverage>>(
-        &get_data_coverage(app_handle.clone(), None)?,
-    )
+    let coverage = serde_json::from_str::<Vec<StockDataCoverage>>(&get_data_coverage(
+        app_handle.clone(),
+        None,
+    )?)
     .unwrap_or_default();
 
     let complete_data = coverage.iter().filter(|c| c.status == "complete").count() as i32;
@@ -1461,8 +1706,130 @@ fn get_data_stats(app_handle: tauri::AppHandle) -> Result<String, String> {
         newest_date,
     };
 
-    serde_json::to_string(&stats)
-        .map_err(|e| format!("Failed to serialize stats: {}", e))
+    serde_json::to_string(&stats).map_err(|e| format!("Failed to serialize stats: {}", e))
+}
+
+#[tauri::command]
+fn save_nav_snapshot(
+    app_handle: tauri::AppHandle,
+    snapshot: NavSnapshotPayload,
+) -> Result<String, String> {
+    let navs_dir = get_navs_dir(&app_handle)?;
+    let safe_id = sanitize_timestamp(&snapshot.timestamp);
+    let file_path = navs_dir.join(format!("nav_{}.json", safe_id));
+    let content = serde_json::to_string_pretty(&snapshot)
+        .map_err(|e| format!("Failed to serialize NAV snapshot: {}", e))?;
+
+    write(&file_path, content).map_err(|e| format!("Failed to write NAV snapshot: {}", e))?;
+
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn save_position_snapshot(
+    app_handle: tauri::AppHandle,
+    snapshot: PositionSnapshotPayload,
+) -> Result<String, String> {
+    let navs_dir = get_navs_dir(&app_handle)?;
+    let symbol = snapshot.stock;
+
+    let transactions = load_symbol_transactions(&app_handle, &symbol)?;
+    let currency = transactions
+        .first()
+        .map(|t| t.currency.clone())
+        .unwrap_or(snapshot.currency);
+    let mut prices = load_price_history_for_symbol(&app_handle, &symbol)?;
+
+    if let Some(first_txn_date) = transactions.first().map(|t| t.date) {
+        prices.retain(|record| record.date >= first_txn_date);
+    }
+
+    if prices.is_empty() {
+        return Err(format!("No price history available for {}", symbol));
+    }
+
+    let mut timeline = build_position_timeline(&prices, &transactions);
+    if timeline.is_empty() {
+        return Err(format!(
+            "Failed to calculate position history for {}",
+            symbol
+        ));
+    }
+
+    // Reverse to store latest rows first for faster partial reads.
+    timeline.reverse();
+
+    let dates: Vec<String> = timeline.iter().map(|(d, _, _)| d.clone()).collect();
+    let closes: Vec<f64> = timeline.iter().map(|(_, close, _)| *close).collect();
+    let shares_vec: Vec<f64> = timeline.iter().map(|(_, _, shares)| *shares).collect();
+
+    let base_df = DataFrame::new(vec![
+        Series::new("date", dates),
+        Series::new("close", closes),
+        Series::new("shares", shares_vec),
+    ])
+    .map_err(|e| format!("Failed to build dataframe: {}", e))?;
+
+    let mut calculated = base_df
+        .lazy()
+        .with_columns([(col("close") * col("shares")).alias("position_value")])
+        .collect()
+        .map_err(|e| format!("Failed to evaluate dataframe: {}", e))?;
+
+    calculated
+        .with_column(Series::new(
+            "currency",
+            vec![currency.clone(); calculated.height()],
+        ))
+        .map_err(|e| format!("Failed to append currency column: {}", e))?;
+    calculated
+        .with_column(Series::new(
+            "symbol",
+            vec![symbol.clone(); calculated.height()],
+        ))
+        .map_err(|e| format!("Failed to append symbol column: {}", e))?;
+
+    let safe_symbol = symbol.replace(':', "_");
+    let file_path = navs_dir.join(format!("{}.csv", safe_symbol));
+    let mut file =
+        File::create(&file_path).map_err(|e| format!("Failed to create {:?}: {}", file_path, e))?;
+
+    CsvWriter::new(&mut file)
+        .include_header(true)
+        .finish(&mut calculated)
+        .map_err(|e| format!("Failed to write CSV: {}", e))?;
+
+    Ok(file_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn read_nav_file(app_handle: tauri::AppHandle, symbol: String) -> Result<String, String> {
+    let navs_dir = get_navs_dir(&app_handle)?;
+    let safe_symbol = symbol.replace(':', "_");
+
+    let entries = std::fs::read_dir(&navs_dir)
+        .map_err(|e| format!("Failed to read navs directory: {}", e))?;
+
+    let mut matching_files: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with(&safe_symbol) && name.ends_with(".csv"))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if matching_files.is_empty() {
+        return Err(format!("No NAV file found for symbol '{}'", symbol));
+    }
+
+    matching_files.sort_by(|a, b| b.cmp(a));
+    let latest_file = &matching_files[0];
+
+    std::fs::read_to_string(latest_file)
+        .map_err(|e| format!("Failed to read NAV file for '{}': {}", symbol, e))
 }
 
 fn main() {
@@ -1501,7 +1868,10 @@ fn main() {
             proxy_get,
             get_data_coverage,
             get_split_history,
-            get_data_stats
+            get_data_stats,
+            save_nav_snapshot,
+            save_position_snapshot,
+            read_nav_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

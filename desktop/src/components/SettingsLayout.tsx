@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import styled from 'styled-components';
-import { Key, Database, DollarSign } from 'lucide-react';
+import { Key, Database, DollarSign, Layers } from 'lucide-react';
 
 const LayoutContainer = styled.div`
   display: flex;
@@ -64,9 +64,11 @@ const Content = styled.main`
   min-width: 0;
 `;
 
+type SettingsPageKey = 'keys' | 'data-readiness' | 'currency-data' | 'navs';
+
 interface SettingsLayoutProps {
-  currentPage: 'keys' | 'data-readiness' | 'currency-data';
-  onNavigate: (page: 'keys' | 'data-readiness' | 'currency-data') => void;
+  currentPage: SettingsPageKey;
+  onNavigate: (page: SettingsPageKey) => void;
   children: ReactNode;
 }
 
@@ -100,6 +102,15 @@ export function SettingsLayout({ currentPage, onNavigate, children }: SettingsLa
             >
               <DollarSign size={18} />
               FX Rates
+            </NavButton>
+          </NavItem>
+          <NavItem $active={currentPage === 'navs'}>
+            <NavButton
+              $active={currentPage === 'navs'}
+              onClick={() => onNavigate('navs')}
+            >
+              <Layers size={18} />
+              NAV Snapshots
             </NavButton>
           </NavItem>
         </NavList>
