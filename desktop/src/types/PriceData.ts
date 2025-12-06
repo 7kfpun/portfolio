@@ -6,6 +6,8 @@ export interface PriceRecord {
   high?: number;
   low?: number;
   volume?: number;
+  adjusted_close?: number;
+  split_unadjusted_close?: number;
   source: 'manual' | 'yahoo_finance';
   updated_at: string;
 }

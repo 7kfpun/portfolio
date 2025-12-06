@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { StockDetailData, ChartDataPoint, TransactionEvent, DividendSummary, StockMetrics } from '../types/StockDetail';
 import { stockDetailService } from '../services/stockDetailService';
+import { yahooMetaService } from '../services/yahooMetaService';
+import { YahooMeta } from '../types/YahooMeta';
 import { usePortfolioStore } from './portfolioStore';
 import { useTransactionsStore } from './transactionsStore';
 import {
@@ -10,7 +12,7 @@ import {
   extractTransactionEvents,
 } from '../utils/stockDetailCalculations';
 
-type ChartTimeRange = '1M' | '3M' | '6M' | '1Y' | 'ALL';
+export type ChartTimeRange = '1W' | '1M' | '3M' | '6M' | 'YTD' | '1Y' | '5Y' | 'ALL' | 'MTD';
 
 interface StockDetailState {
   selectedSymbol: string | null;
@@ -20,6 +22,7 @@ interface StockDetailState {
   transactionEvents: TransactionEvent[];
   dividendSummary: DividendSummary | null;
   metrics: StockMetrics | null;
+  yahooMeta: YahooMeta | null; // Added
   loading: boolean;
   error: string | null;
   chartTimeRange: ChartTimeRange;
@@ -37,6 +40,7 @@ export const useStockDetailStore = create<StockDetailState>((set, get) => ({
   transactionEvents: [],
   dividendSummary: null,
   metrics: null,
+  yahooMeta: null, // Initial value
   loading: false,
   error: null,
   chartTimeRange: '1Y',
@@ -55,7 +59,12 @@ export const useStockDetailStore = create<StockDetailState>((set, get) => ({
 
       const stockTransactions = transactionsState.transactions.filter(t => t.stock === symbol);
 
-      const stockData = await stockDetailService.loadStockData(symbol);
+      // Parallel fetch for stock data and meta
+      const [stockData, yahooMeta] = await Promise.all([
+        stockDetailService.loadStockData(symbol),
+        yahooMetaService.getMeta(symbol)
+      ]);
+
       stockData.position = position;
       stockData.transactions = stockTransactions;
       stockData.currency = position.currency;
@@ -107,6 +116,7 @@ export const useStockDetailStore = create<StockDetailState>((set, get) => ({
         transactionEvents,
         metrics,
         dividendSummary,
+        yahooMeta, // Set meta
         loading: false,
       });
     } catch (err) {

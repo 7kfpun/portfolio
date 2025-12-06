@@ -636,6 +636,7 @@ export function PortfolioPage() {
   const [gainFilter, setGainFilter] = useState<'all' | 'gainers' | 'losers'>('all');
   const [baseCurrency, setBaseCurrency] = useState<CurrencyType>('USD');
   const [showInBaseCurrency, setShowInBaseCurrency] = useState(false);
+  const [showInactive, setShowInactive] = useState(false);
   const [historicalPrices, setHistoricalPrices] = useState<Map<string, PriceRecord[]>>(new Map());
   const [privacyMode, setPrivacyMode] = useState(false);
   const historyLogRef = useRef<Set<string>>(new Set());
@@ -959,6 +960,10 @@ export function PortfolioPage() {
       result = result.filter(position => position.currency === currencyFilter);
     }
 
+    if (!showInactive) {
+      result = result.filter(position => position.shares > 0);
+    }
+
     if (gainFilter === 'gainers') {
       result = result.filter(position => {
         const { amount } = getDailyChange(position);
@@ -985,7 +990,7 @@ export function PortfolioPage() {
     });
 
     return sorted;
-  }, [positions, searchQuery, currencyFilter, gainFilter, sortConfig]);
+  }, [positions, searchQuery, currencyFilter, gainFilter, sortConfig, showInactive]);
 
   const allocationData = useMemo(() => {
     if (!summary || fxRates.size === 0) return [];
@@ -1321,10 +1326,7 @@ export function PortfolioPage() {
           Positions
         </SectionTitle>
         <FilterPanel>
-          <FilterHeader>
-            <SlidersHorizontal size={16} />
-            Refine Positions
-          </FilterHeader>
+
           <FilterInput
             type="search"
             placeholder="Search by ticker..."
@@ -1356,18 +1358,31 @@ export function PortfolioPage() {
               </ToggleOption>
             ))}
           </ToggleGroup>
+          <div style={{ width: '100%', height: 0, flexBasis: '100%' }} />
+          <ToggleContainer>
+            <Toggle
+              id="base-currency-toggle"
+              type="checkbox"
+              checked={showInBaseCurrency}
+              onChange={e => setShowInBaseCurrency(e.target.checked)}
+            />
+            <ToggleLabel htmlFor="base-currency-toggle">
+              Show values in {baseCurrency}
+            </ToggleLabel>
+          </ToggleContainer>
+          <ToggleContainer>
+            <Toggle
+              id="show-inactive-toggle"
+              type="checkbox"
+              checked={showInactive}
+              onChange={e => setShowInactive(e.target.checked)}
+            />
+            <ToggleLabel htmlFor="show-inactive-toggle">
+              Show inactive positions
+            </ToggleLabel>
+          </ToggleContainer>
         </FilterPanel>
-        <ToggleContainer style={{ marginTop: '1rem', marginBottom: '0.5rem' }}>
-          <ToggleLabel htmlFor="base-currency-toggle">
-            Show values in {baseCurrency}
-          </ToggleLabel>
-          <Toggle
-            id="base-currency-toggle"
-            type="checkbox"
-            checked={showInBaseCurrency}
-            onChange={e => setShowInBaseCurrency(e.target.checked)}
-          />
-        </ToggleContainer>
+
         <TableMeta>
           Showing {filteredPositions.length} of {positions.length} positions
         </TableMeta>

@@ -89,7 +89,7 @@ export function buildFullPositionHistory(transactions: Transaction[]): FullPosit
   return Array.from(map.values())
     .map(entry => ({
       ...entry,
-      status: entry.shares > 0 ? 'Active' : 'Closed',
+      status: (entry.shares > 0 ? 'Active' : 'Closed') as 'Active' | 'Closed',
     }))
     .sort((a, b) => (b.lastTransaction || '').localeCompare(a.lastTransaction || ''));
 }

@@ -9,11 +9,13 @@ interface PriceFileRow {
   high?: string;
   low?: string;
   volume?: string;
+  adjusted_close?: string;
+  split_unadjusted_close?: string;
   source?: string;
   updated_at?: string;
 }
 
-const PRICE_FILE_HEADER = 'date,close,open,high,low,volume,source,updated_at';
+const PRICE_FILE_HEADER = 'date,close,open,high,low,volume,adjusted_close,split_unadjusted_close,source,updated_at';
 
 export class PriceDataService {
   private parsePriceFile(symbol: string, csvContent: string): PriceRecord[] {
@@ -39,6 +41,8 @@ export class PriceDataService {
         high: parseNumber(row.high),
         low: parseNumber(row.low),
         volume: parseNumber(row.volume),
+        adjusted_close: parseNumber(row.adjusted_close),
+        split_unadjusted_close: parseNumber(row.split_unadjusted_close),
         source: (row.source as PriceRecord['source']) || 'yahoo_finance',
         updated_at: row.updated_at || new Date().toISOString(),
       });
@@ -86,6 +90,8 @@ export class PriceDataService {
           record.high ?? '',
           record.low ?? '',
           record.volume ?? '',
+          record.adjusted_close ?? '',
+          record.split_unadjusted_close ?? '',
           record.source,
           record.updated_at,
         ].join(',')

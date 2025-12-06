@@ -21,6 +21,7 @@ export interface SplitRecord {
 export interface ChartDataPoint {
   date: string;
   close: number;
+  unadjustedClose?: number;
   value?: number;
   costBasis?: number;
   volume?: number | null;
@@ -66,5 +67,7 @@ export interface StockMetrics {
   maxDrawdownPercent: number;
   daysSincePositive: number | null;
   bestDayGain: number;
+  bestDayGainDate: string | null;
   worstDayLoss: number;
+  worstDayLossDate: string | null;
 }

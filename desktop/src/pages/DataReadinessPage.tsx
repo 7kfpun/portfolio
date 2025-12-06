@@ -9,6 +9,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
+  Legend,
 } from 'recharts';
 import { Container, Header, Meta, Title, Description, Card } from '../components/PageLayout';
 import { historicalDataService } from '../services/historicalDataService';
@@ -501,17 +502,24 @@ export function DataReadinessPage() {
     const slice = sorted.length > MAX_POINTS ? sorted.slice(-MAX_POINTS) : sorted;
     if (slice.length === 0) return null;
 
-    const values = slice.map(r => r.close);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const latest = slice[slice.length - 1].close;
-    const startDate = slice[0].date;
-    const endDate = slice[slice.length - 1].date;
-
     const data = slice.map(record => ({
       date: record.date,
       close: record.close,
+      adjusted_close: record.adjusted_close,
+      split_unadjusted_close: record.split_unadjusted_close,
     }));
+
+    const allValues = data.flatMap(d => [
+      d.close,
+      d.adjusted_close,
+      d.split_unadjusted_close
+    ].filter((v): v is number => v !== undefined && v !== null));
+
+    const min = Math.min(...allValues);
+    const max = Math.max(...allValues);
+    const latest = slice[slice.length - 1].close;
+    const startDate = slice[0].date;
+    const endDate = slice[slice.length - 1].date;
 
     return { data, min, max, latest, startDate, endDate, count: slice.length };
   };
@@ -638,7 +646,7 @@ export function DataReadinessPage() {
             <StatusDetails>
               {bulkStatusDetails}
               {bulkState.running && bulkState.nextTicker
-                ? ` Next ticker in ~10s: ${bulkState.nextTicker}`
+                ? ` Next: ${bulkState.nextTicker}`
                 : ''}
             </StatusDetails>
           </StatusBar>
@@ -782,6 +790,14 @@ export function DataReadinessPage() {
                                             <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.3} />
                                             <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
                                           </linearGradient>
+                                          <linearGradient id={`adjustedGradient-${item.ticker}`} x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#16a34a" stopOpacity={0.3} />
+                                            <stop offset="95%" stopColor="#16a34a" stopOpacity={0} />
+                                          </linearGradient>
+                                          <linearGradient id={`unadjustedGradient-${item.ticker}`} x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#9333ea" stopOpacity={0.3} />
+                                            <stop offset="95%" stopColor="#9333ea" stopOpacity={0} />
+                                          </linearGradient>
                                         </defs>
                                         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                                         <XAxis
@@ -799,12 +815,37 @@ export function DataReadinessPage() {
                                           stroke="#94a3b8"
                                         />
                                         <Tooltip
-                                          formatter={value => formatPrice(value as number, 4)}
+                                          formatter={(value, name) => [
+                                            formatPrice(value as number, 4),
+                                            name === 'close' ? 'Close' :
+                                            name === 'adjusted_close' ? 'Adj Close' :
+                                            name === 'split_unadjusted_close' ? 'Split Unadj' : name
+                                          ]}
                                           labelFormatter={value => value}
+                                        />
+                                        <Legend />
+                                        <Area
+                                          type="monotone"
+                                          dataKey="split_unadjusted_close"
+                                          name="Split Unadj"
+                                          stroke="#9333ea"
+                                          strokeWidth={2}
+                                          fill={`url(#unadjustedGradient-${item.ticker})`}
+                                          isAnimationActive={false}
+                                        />
+                                        <Area
+                                          type="monotone"
+                                          dataKey="adjusted_close"
+                                          name="Adj Close"
+                                          stroke="#16a34a"
+                                          strokeWidth={2}
+                                          fill={`url(#adjustedGradient-${item.ticker})`}
+                                          isAnimationActive={false}
                                         />
                                         <Area
                                           type="monotone"
                                           dataKey="close"
+                                          name="Close"
                                           stroke="#0ea5e9"
                                           strokeWidth={2}
                                           fill={`url(#priceGradient-${item.ticker})`}

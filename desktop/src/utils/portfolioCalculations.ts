@@ -56,7 +56,7 @@ export function calculatePositions(transactions: Transaction[]): Position[] {
     }
   }
 
-  return Array.from(positionMap.values()).filter(p => p.shares > 0);
+  return Array.from(positionMap.values());
 }
 
 export function calculatePortfolioSummary(
@@ -75,6 +75,11 @@ export function calculatePortfolioSummary(
   };
 
   for (const position of positions) {
+    // Skip inactive positions (0 shares) for currency breakdown
+    if (position.shares <= 0) {
+      continue;
+    }
+
     const value = position.currentValue || position.totalCost;
     const cost = position.totalCost;
     const gainLoss = value - cost;

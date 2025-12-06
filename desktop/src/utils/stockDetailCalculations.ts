@@ -124,15 +124,31 @@ export function calculateStockMetrics(
   const highestPrice = prices.length > 0 ? Math.max(...prices) : position.currentPrice || 0;
   const lowestPrice = prices.length > 0 ? Math.min(...prices) : position.currentPrice || 0;
 
-  const priceVolatility = calculateVolatility(priceHistory);
-  const { amount: maxDrawdown, percent: maxDrawdownPercent } = calculateMaxDrawdown(priceHistory);
+  // Filter for last 5 years for specific metrics
+  const fiveYearsAgo = new Date();
+  fiveYearsAgo.setFullYear(fiveYearsAgo.getFullYear() - 5);
+  const fiveYearHistory = priceHistory.filter(p => new Date(p.date) >= fiveYearsAgo);
+  // specific metrics check if enough data is available (needs at least 2 points)
+  const metricHistory = fiveYearHistory.length >= 2 ? fiveYearHistory : priceHistory; 
+
+  const priceVolatility = calculateVolatility(metricHistory);
+  const { amount: maxDrawdown, percent: maxDrawdownPercent } = calculateMaxDrawdown(metricHistory);
 
   let bestDayGain = 0;
+  let bestDayGainDate: string | null = null;
   let worstDayLoss = 0;
-  for (let i = 1; i < priceHistory.length; i++) {
-    const dailyChange = priceHistory[i].close - priceHistory[i - 1].close;
-    if (dailyChange > bestDayGain) bestDayGain = dailyChange;
-    if (dailyChange < worstDayLoss) worstDayLoss = dailyChange;
+  let worstDayLossDate: string | null = null;
+
+  for (let i = 1; i < metricHistory.length; i++) {
+    const dailyChange = metricHistory[i].close - metricHistory[i - 1].close;
+    if (dailyChange > bestDayGain) {
+        bestDayGain = dailyChange;
+        bestDayGainDate = metricHistory[i].date;
+    }
+    if (dailyChange < worstDayLoss) {
+        worstDayLoss = dailyChange;
+        worstDayLossDate = metricHistory[i].date;
+    }
   }
 
   let daysSincePositive: number | null = null;
@@ -162,7 +178,9 @@ export function calculateStockMetrics(
     maxDrawdownPercent,
     daysSincePositive,
     bestDayGain,
+    bestDayGainDate,
     worstDayLoss,
+    worstDayLossDate,
   };
 }
 
@@ -324,6 +342,7 @@ export function buildChartData(
     chartData.push({
       date: record.date,
       close: record.close,
+      unadjustedClose: record.split_unadjusted_close,
       costBasis,
       volume: record.volume ?? null,
       shares: runningShares,

@@ -462,7 +462,10 @@ export function NavManagementPage() {
         const chartPoints = buildChartData(priceHistory, positionTransactions, []);
         const mappedPoints: PositionValuePoint[] = chartPoints.map(point => {
           const shares = point.shares ?? 0;
-          const valueNative = shares * point.close;
+          // Use unadjusted Close if available (for correct pre-split valuation with unadjusted shares)
+          // otherwise fall back to standard Close
+          const price = point.unadjustedClose ?? point.close;
+          const valueNative = shares * price;
           const valueUSD = convertToUSD(valueNative, selectedRow.currency, fxRates);
           const valueBase = convertFromUSD(valueUSD, baseCurrency, fxRates);
 
@@ -505,40 +508,48 @@ export function NavManagementPage() {
     };
   }, [selectedRow, transactions, fxRates, baseCurrency]);
 
-  const handleSnapshot = useCallback(async () => {
+  const handleCalculateAll = useCallback(async () => {
     if (!enrichedPositions.length) return;
     setSaving(true);
     setStatusMessage(null);
     setErrorMessage(null);
-    try {
-      const payload = {
-        timestamp: new Date().toISOString(),
-        base_currency: baseCurrency,
-        total_value_usd: totals.totalUSD,
-        entries: enrichedPositions.map<NavSnapshotEntry>(entry => ({
-          stock: entry.stock,
-          currency: entry.currency,
-          shares: entry.shares,
-          average_cost: entry.averageCost,
-          latest_price: entry.latestPrice,
-          market_value: entry.marketValue,
-          market_value_usd: entry.marketValueUSD,
-          status: entry.status,
-          last_transaction: entry.lastTransaction,
-        })),
-      };
 
-      const savedPath = await navService.saveSnapshot(payload);
-      setStatusMessage(`NAV snapshot saved to ${savedPath}`);
-    } catch (error) {
-      console.error('Failed to save NAV snapshot:', error);
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Failed to save NAV snapshot'
-      );
-    } finally {
-      setSaving(false);
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const position of enrichedPositions) {
+      // Update status to show current progress
+      setStatusMessage(`Processing ${position.stock}...`);
+      
+      try {
+        const payload = {
+          timestamp: new Date().toISOString(),
+          stock: position.stock,
+          currency: position.currency,
+          shares: position.shares,
+          average_cost: position.averageCost,
+          latest_price: position.latestPrice,
+          market_value: position.marketValue,
+          market_value_usd: position.marketValueUSD,
+          status: position.status,
+          last_transaction: position.lastTransaction,
+        };
+
+        await navService.savePositionSnapshot(payload);
+        successCount++;
+      } catch (error) {
+        console.error(`Failed to save snapshot for ${position.stock}:`, error);
+        errorCount++;
+      }
     }
-  }, [enrichedPositions, baseCurrency, totals.totalUSD]);
+
+    setSaving(false);
+    if (errorCount > 0) {
+      setErrorMessage(`Completed with issues: ${successCount} saved, ${errorCount} failed.`);
+    } else {
+      setStatusMessage(`Successfully calculated and saved snapshots for ${successCount} positions.`);
+    }
+  }, [enrichedPositions]);
 
   const columns = useMemo<Column<EnrichedPosition>[]>(() => [
     {
@@ -665,9 +676,9 @@ export function NavManagementPage() {
           <ActionButton
             $variant="primary"
             disabled={enrichedPositions.length === 0 || saving || pricesLoading}
-            onClick={handleSnapshot}
+            onClick={handleCalculateAll}
           >
-            {saving ? 'Calculating…' : 'Calculate & Save NAV'}
+            {saving ? 'Calculating...' : 'Calculate All'}
           </ActionButton>
         </HeaderRow>
         <SummaryGrid>

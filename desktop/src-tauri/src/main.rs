@@ -33,7 +33,8 @@ fn greet(name: &str) -> String {
 const SETTINGS_HEADER: &str = "key,value\n";
 const SECURITIES_HEADER: &str =
     "ticker,name,exchange,currency,type,sector,data_source,api_symbol,last_updated\n";
-const PRICE_FILE_HEADER: &str = "date,close,open,high,low,volume,source,updated_at";
+const PRICE_FILE_HEADER: &str = "date,close,open,high,low,volume,adjusted_close,split_unadjusted_close,source,updated_at";
+const DIVIDEND_FILE_HEADER: &str = "ex_date,amount,currency,updated_at";
 #[derive(Clone, Debug)]
 struct PriceRecordEntry {
     symbol: String,
@@ -43,43 +44,52 @@ struct PriceRecordEntry {
     high: Option<f64>,
     low: Option<f64>,
     volume: Option<f64>,
+    adjusted_close: Option<f64>,
+    split_unadjusted_close: Option<f64>,
     source: String,
 }
 
 fn build_price_csv_content(entries: &[PriceRecordEntry]) -> String {
-    let mut content = String::new();
-    content.push_str(PRICE_FILE_HEADER);
-    content.push('\n');
-
-    let updated_at = Utc::now().to_rfc3339();
-
-    for entry in entries {
-        content.push_str(&format!(
-            "{},{},{},{},{},{},{},{}\n",
-            entry.date.format("%Y-%m-%d"),
-            entry.close,
-            entry
-                .open
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "".to_string()),
-            entry
-                .high
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "".to_string()),
-            entry
-                .low
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "".to_string()),
-            entry
-                .volume
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "".to_string()),
-            entry.source,
-            updated_at
-        ));
+    if entries.is_empty() {
+        return format!("{}\n", PRICE_FILE_HEADER);
     }
 
-    content
+    let updated_at = Utc::now().to_rfc3339();
+    let n_rows = entries.len();
+
+    // Build columns
+    let dates: Vec<String> = entries.iter().map(|e| e.date.format("%Y-%m-%d").to_string()).collect();
+    let closes: Vec<f64> = entries.iter().map(|e| e.close).collect();
+    let opens: Vec<Option<f64>> = entries.iter().map(|e| e.open).collect();
+    let highs: Vec<Option<f64>> = entries.iter().map(|e| e.high).collect();
+    let lows: Vec<Option<f64>> = entries.iter().map(|e| e.low).collect();
+    let volumes: Vec<Option<f64>> = entries.iter().map(|e| e.volume).collect();
+    let adjusted_closes: Vec<Option<f64>> = entries.iter().map(|e| e.adjusted_close).collect();
+    let split_unadjusted_closes: Vec<Option<f64>> = entries.iter().map(|e| e.split_unadjusted_close).collect();
+    let sources: Vec<&str> = entries.iter().map(|e| e.source.as_str()).collect();
+    let updated_ats: Vec<&str> = vec![updated_at.as_str(); n_rows];
+
+    // Create DataFrame
+    let df = DataFrame::new(vec![
+        Series::new("date", dates),
+        Series::new("close", closes),
+        Series::new("open", opens),
+        Series::new("high", highs),
+        Series::new("low", lows),
+        Series::new("volume", volumes),
+        Series::new("adjusted_close", adjusted_closes),
+        Series::new("split_unadjusted_close", split_unadjusted_closes),
+        Series::new("source", sources),
+        Series::new("updated_at", updated_ats),
+    ]).expect("Failed to create price DataFrame");
+
+    // Write to CSV string
+    let mut buf = Vec::new();
+    CsvWriter::new(&mut buf)
+        .finish(&mut df.clone())
+        .expect("Failed to write CSV");
+    
+    String::from_utf8(buf).unwrap_or_else(|_| format!("{}\n", PRICE_FILE_HEADER))
 }
 
 #[derive(Deserialize)]
@@ -93,13 +103,40 @@ struct YahooChartQuote {
 
 #[derive(Deserialize)]
 struct YahooChartResult {
+    meta: Option<serde_json::Value>,
     timestamp: Option<Vec<i64>>,
     indicators: Option<YahooIndicators>,
+    events: Option<YahooEvents>,
+}
+
+#[derive(Deserialize)]
+struct YahooEvents {
+    dividends: Option<HashMap<String, YahooDividend>>,
+    splits: Option<HashMap<String, YahooSplit>>,
+}
+
+#[derive(Deserialize)]
+struct YahooDividend {
+    date: i64,
+    amount: f64,
+}
+
+#[derive(Deserialize)]
+struct YahooSplit {
+    date: i64,
+    numerator: f64,
+    denominator: f64,
 }
 
 #[derive(Deserialize)]
 struct YahooIndicators {
     quote: Option<Vec<YahooChartQuote>>,
+    adjclose: Option<Vec<YahooAdjClose>>,
+}
+
+#[derive(Deserialize)]
+struct YahooAdjClose {
+    adjclose: Option<Vec<Option<f64>>>,
 }
 
 #[derive(Deserialize)]
@@ -244,12 +281,20 @@ fn get_exchange_and_symbol(stock: &str) -> (Option<String>, String) {
 fn yahoo_symbol_for(exchange: Option<&str>, base_symbol: &str) -> String {
     match exchange {
         Some("HKEX") => format!("{}.HK", base_symbol),
-        Some("TWSE") => format!("{}.TW", base_symbol),
-        Some("JPX") => format!("{}.T", base_symbol),
-        Some("NYSE") | Some("NASDAQ") | Some("NYSEARCA") | Some("NYSEAMERICAN") => {
+        Some("TWSE") | Some("TPE") => format!("{}.TW", base_symbol),
+        Some("JPX") | Some("TYO") => format!("{}.T", base_symbol),
+        Some("LSE") => format!("{}.L", base_symbol),
+        Some("ASX") => format!("{}.AX", base_symbol),
+        Some("TSX") => format!("{}.TO", base_symbol),
+        Some("FRA") => format!("{}.F", base_symbol),
+        Some("PAR") => format!("{}.PA", base_symbol),
+        Some("AMS") => format!("{}.AS", base_symbol),
+        Some("STO") => format!("{}.ST", base_symbol),
+        Some("KRX") | Some("KSE") => format!("{}.KS", base_symbol),
+        Some("KOSDAQ") => format!("{}.KQ", base_symbol),
+        Some("NYSE") | Some("NASDAQ") | Some("NYSEARCA") | Some("NYSEAMERICAN") | Some("OTCMKTS") => {
             base_symbol.to_string()
         }
-        Some("OTCMKTS") => base_symbol.to_string(),
         _ => base_symbol.to_string(),
     }
 }
@@ -259,7 +304,7 @@ fn fetch_yahoo_chunk(
     canonical_symbol: &str,
     start: NaiveDate,
     end: NaiveDate,
-) -> Result<Vec<PriceRecordEntry>, String> {
+) -> Result<(Vec<PriceRecordEntry>, Vec<(NaiveDate, f64)>, Option<serde_json::Value>), String> {
     let mut url = url::Url::parse(&format!(
         "https://query1.finance.yahoo.com/v8/finance/chart/{}",
         yahoo_symbol
@@ -287,19 +332,42 @@ fn fetch_yahoo_chunk(
         )
         .append_pair("interval", "1d")
         .append_pair("events", "div,splits")
-        .append_pair("includeAdjustedClose", "false");
+        .append_pair("includeAdjustedClose", "true");
+
+    println!("[RUST] Fetching Yahoo data for {} from {} to {}", yahoo_symbol, start, end);
+    println!("[RUST] URL: {}", url.as_str());
 
     let client = reqwest::blocking::Client::new();
     let response = client
         .get(url)
+        .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .send()
         .map_err(|e| format!("Yahoo request failed: {}", e))?;
+    
+    let status = response.status();
+    println!("[RUST] Yahoo response status: {}", status);
+    
     let text = response
         .text()
         .map_err(|e| format!("Failed to read Yahoo response: {}", e))?;
+    
+    if text.is_empty() {
+        eprintln!("[RUST] ✗ Empty response from Yahoo for {}", yahoo_symbol);
+        return Err("Empty response from Yahoo Finance".to_string());
+    }
+    
+    if text.len() < 100 {
+        eprintln!("[RUST] ⚠ Short response ({}bytes): {}", text.len(), &text);
+    } else {
+        println!("[RUST] Received {} bytes of data", text.len());
+    }
 
     let parsed: YahooChartResponse =
-        serde_json::from_str(&text).map_err(|e| format!("Invalid Yahoo JSON: {}", e))?;
+        serde_json::from_str(&text).map_err(|e| {
+            eprintln!("[RUST] ✗ JSON parse error: {}", e);
+            eprintln!("[RUST] First 500 chars of response: {}", &text.chars().take(500).collect::<String>());
+            format!("Invalid Yahoo JSON: {}", e)
+        })?;
 
     let result = parsed
         .chart
@@ -308,11 +376,35 @@ fn fetch_yahoo_chunk(
         .ok_or_else(|| "Yahoo response missing result".to_string())?;
 
     let timestamps = result.timestamp.unwrap_or_default();
-    let quote = result
-        .indicators
-        .and_then(|ind| ind.quote)
+    
+    // Extract splits to calculate split_unadjusted_close
+    let splits_data = result
+        .events
+        .as_ref()
+        .and_then(|e| e.splits.as_ref())
+        .map(|s| {
+            let mut splits: Vec<(NaiveDate, f64)> = s
+                .values()
+                .filter_map(|split| {
+                    DateTime::from_timestamp(split.date, 0)
+                        .map(|dt| (dt.date_naive(), split.numerator / split.denominator))
+                })
+                .collect();
+            splits.sort_by_key(|s| s.0);
+            splits
+        })
+        .unwrap_or_default();
+    
+    let indicators = result.indicators.ok_or_else(|| "Yahoo response missing indicators".to_string())?;
+    let quote = indicators
+        .quote
         .and_then(|mut q| q.pop())
         .ok_or_else(|| "Yahoo response missing quote values".to_string())?;
+    let adjcloses = indicators
+        .adjclose
+        .and_then(|mut a| a.pop())
+        .and_then(|a| a.adjclose)
+        .unwrap_or_default();
 
     let closes = quote.close.unwrap_or_default();
     let opens = quote.open.unwrap_or_default();
@@ -328,6 +420,14 @@ fn fetch_yahoo_chunk(
                 continue;
             }
             if let Some(Some(close)) = closes.get(idx) {
+                // Calculate split_unadjusted_close by reverse-applying splits
+                // Yahoo's close is already split-adjusted backward
+                // We need to multiply by split ratios for all splits AFTER this date
+                let split_unadjusted = splits_data
+                    .iter()
+                    .filter(|(split_date, _)| *split_date > date)
+                    .fold(*close, |price, (_, ratio)| price * ratio);
+                
                 records.push(PriceRecordEntry {
                     symbol: canonical_symbol.to_string(),
                     date,
@@ -336,32 +436,53 @@ fn fetch_yahoo_chunk(
                     high: highs.get(idx).and_then(|v| *v),
                     low: lows.get(idx).and_then(|v| *v),
                     volume: volumes.get(idx).and_then(|v| *v),
+                    adjusted_close: adjcloses.get(idx).and_then(|v| *v),
+                    split_unadjusted_close: Some(split_unadjusted),
                     source: "yahoo_finance".into(),
                 });
             }
         }
     }
 
-    Ok(records)
+    // Extract dividends from events  
+    let dividends: Vec<(NaiveDate, f64)> = result
+        .events
+        .as_ref()
+        .and_then(|e| e.dividends.as_ref())
+        .map(|divs| {
+            let mut dividend_list: Vec<(NaiveDate, f64)> = divs
+                .values()
+                .filter_map(|div| {
+                    DateTime::from_timestamp(div.date, 0)
+                        .map(|dt| {
+                            let date = dt.date_naive();
+                            if date >= start && date <= end {
+                                Some((date, div.amount))
+                            } else {
+                                None
+                            }
+                        })
+                        .flatten()
+                })
+                .collect();
+            dividend_list.sort_by_key(|d| std::cmp::Reverse(d.0)); // newest first
+            dividend_list
+        })
+        .unwrap_or_default();
+
+    let meta = result.meta.clone();
+
+    Ok((records, dividends, meta))
 }
 
 fn ensure_history_for_symbol(
+    app_handle: &tauri::AppHandle,
     records_map: &mut HashMap<String, Vec<PriceRecordEntry>>,
     symbol: &str,
     earliest_date: NaiveDate,
 ) -> Result<(), String> {
     let today = Utc::now().date_naive();
     let (exchange, base_symbol) = get_exchange_and_symbol(symbol);
-
-    if matches!(
-        exchange.as_deref(),
-        Some("HKEX") | Some("TWSE") | Some("JPX")
-    ) {
-        return Err(format!(
-            "Historical sync for {} is currently limited to US tickers via Yahoo",
-            symbol
-        ));
-    }
 
     let existing_min_date = records_map
         .get(symbol)
@@ -372,27 +493,23 @@ fn ensure_history_for_symbol(
         }
     }
 
-    let mut chunk_end = today;
-    let mut any_new = false;
+    let mut all_dividends: Vec<(NaiveDate, f64)> = Vec::new();
 
-    loop {
-        if chunk_end < earliest_date {
-            break;
-        }
-        let chunk_start_candidate = chunk_end - ChronoDuration::days(182);
-        let chunk_start = if chunk_start_candidate > earliest_date {
-            chunk_start_candidate
-        } else {
-            earliest_date
-        };
+    // Fetch all data in one request instead of chunking
+    let yahoo_symbol = yahoo_symbol_for(exchange.as_deref(), &base_symbol);
+    let (new_records, dividends, meta) = fetch_yahoo_chunk(&yahoo_symbol, symbol, earliest_date, today)?;
 
-        let yahoo_symbol = yahoo_symbol_for(exchange.as_deref(), &base_symbol);
-        let new_records = fetch_yahoo_chunk(&yahoo_symbol, symbol, chunk_start, chunk_end)?;
+    if let Some(meta_json) = meta {
+        let metas_dir = get_yahoo_metas_dir(app_handle)?;
+        let safe_symbol = symbol.replace(':', "_");
+        let file_path = metas_dir.join(format!("{}.json", safe_symbol));
+        let json_content = serde_json::to_string_pretty(&meta_json)
+            .map_err(|e| format!("Failed to serialize meta JSON: {}", e))?;
+        write(&file_path, json_content)
+            .map_err(|e| format!("Failed to write meta file for '{}': {}", symbol, e))?;
+    }
 
-        if new_records.is_empty() {
-            break;
-        }
-
+    if !new_records.is_empty() {
         let entries = records_map.entry(symbol.to_string()).or_default();
         for record in new_records {
             if let Some(existing) = entries.iter_mut().find(|r| r.date == record.date) {
@@ -401,18 +518,46 @@ fn ensure_history_for_symbol(
                 entries.push(record.clone());
             }
         }
-        any_new = true;
+        
+        // Accumulate dividends
+        all_dividends.extend(dividends);
 
-        if chunk_start == earliest_date {
-            break;
-        }
-        chunk_end = chunk_start - ChronoDuration::days(1);
+        // Sort entries
+        entries.sort_by(|a, b| b.date.cmp(&a.date));
     }
-
-    if any_new {
-        if let Some(entries) = records_map.get_mut(symbol) {
-            entries.sort_by(|a, b| b.date.cmp(&a.date));
+        
+    // Save dividend data if any
+    if !all_dividends.is_empty() {
+        all_dividends.sort_by_key(|d| std::cmp::Reverse(d.0)); // newest first
+        all_dividends.dedup_by_key(|d| d.0); // remove duplicates
+        
+        let mut dividend_csv = String::from(DIVIDEND_FILE_HEADER);
+        dividend_csv.push('\n');
+        let updated_at = Utc::now().to_rfc3339();
+        
+        for (date, amount) in all_dividends {
+            // Get currency from symbol or default to USD
+            let currency = if symbol.contains(':') {
+                // Extract currency based on exchange, or default to USD
+                "USD" // TODO: improve currency detection
+            } else {
+                "USD"
+            };
+            dividend_csv.push_str(&format!(
+                "{},{},{},{}\n",
+                date.format("%Y-%m-%d"),
+                amount,
+                currency,
+                updated_at
+            ));
         }
+        
+        // Write dividend file
+        let dividends_dir = get_dividends_dir(app_handle)?;
+        let safe_symbol = symbol.replace(':', "_");
+        let file_path = dividends_dir.join(format!("{}.csv", safe_symbol));
+        write(&file_path, dividend_csv)
+            .map_err(|e| format!("Failed to write dividend file for '{}': {}", symbol, e))?;
     }
 
     Ok(())
@@ -423,6 +568,13 @@ fn get_data_dir(_app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     // This keeps a single authoritative location for price/FX/split files.
     static DATA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data");
     let path = PathBuf::from(DATA_DIR);
+    ensure_dir(&path)?;
+    Ok(path)
+}
+
+fn get_yahoo_metas_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = get_data_dir(app_handle)?;
+    let path = data_dir.join("yahoo_metas");
     ensure_dir(&path)?;
     Ok(path)
 }
@@ -476,6 +628,13 @@ fn get_navs_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     let navs_dir = data_dir.join("navs");
     ensure_dir(&navs_dir)?;
     Ok(navs_dir)
+}
+
+fn get_dividends_dir(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = get_data_dir(app_handle)?;
+    let dividends_dir = data_dir.join("dividends");
+    ensure_dir(&dividends_dir)?;
+    Ok(dividends_dir)
 }
 
 fn read_file_head(path: &Path, lines: usize) -> Result<String, String> {
@@ -782,6 +941,54 @@ fn list_split_files(app_handle: tauri::AppHandle) -> Result<Vec<String>, String>
     Ok(symbols)
 }
 
+#[tauri::command]
+fn write_dividend_file(
+    app_handle: tauri::AppHandle,
+    symbol: String,
+    content: String,
+) -> Result<(), String> {
+    let dividends_dir = get_dividends_dir(&app_handle)?;
+    let safe_symbol = symbol.replace(':', "_");
+    let file_path = dividends_dir.join(format!("{}.csv", safe_symbol));
+
+    write(&file_path, content)
+        .map_err(|e| format!("Failed to write dividend file for '{}': {}", symbol, e))
+}
+
+#[tauri::command]
+fn read_dividend_file(app_handle: tauri::AppHandle, symbol: String) -> Result<String, String> {
+    let dividends_dir = get_dividends_dir(&app_handle)?;
+    let safe_symbol = symbol.replace(':', "_");
+    let file_path = dividends_dir.join(format!("{}.csv", safe_symbol));
+
+    if !file_path.exists() {
+        return Ok(String::new());
+    }
+
+    read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read dividend file for '{}': {}", symbol, e))
+}
+
+#[tauri::command]
+fn list_dividend_files(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let dividends_dir = get_dividends_dir(&app_handle)?;
+    let mut symbols = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&dividends_dir) {
+        for entry in entries.flatten() {
+            if let Some(filename) = entry.file_name().to_str() {
+                if filename.ends_with(".csv") {
+                    let symbol = filename.trim_end_matches(".csv").replace('_', ":");
+                    symbols.push(symbol);
+                }
+            }
+        }
+    }
+
+    symbols.sort();
+    Ok(symbols)
+}
+
 fn persist_fx_rate_file(
     app_handle: &tauri::AppHandle,
     pair: &str,
@@ -857,6 +1064,39 @@ fn list_fx_rate_files(app_handle: tauri::AppHandle) -> Result<Vec<String>, Strin
 #[tauri::command]
 fn sync_history_once(app_handle: tauri::AppHandle) -> Result<(), String> {
     sync_full_history(&app_handle)
+}
+
+#[tauri::command]
+fn download_symbol_history(
+    app_handle: tauri::AppHandle,
+    symbol: String,
+) -> Result<(), String> {
+    println!("[RUST] Received download request for: {}", symbol);
+    
+    let fifteen_years_ago = Utc::now().date_naive() - ChronoDuration::days(15 * 365);
+    let mut price_map: HashMap<String, Vec<PriceRecordEntry>> = HashMap::new();
+    
+    println!("[RUST] Calling ensure_history_for_symbol for: {}", symbol);
+    // Use the existing ensure_history_for_symbol logic
+    match ensure_history_for_symbol(&app_handle, &mut price_map, &symbol, fifteen_years_ago) {
+        Ok(_) => println!("[RUST] ✓ Successfully fetched data for: {}", symbol),
+        Err(e) => {
+            eprintln!("[RUST] ✗ Error fetching data for {}: {}", symbol, e);
+            return Err(e);
+        }
+    }
+    
+    // Write the price file
+    if let Some(entries) = price_map.get(&symbol) {
+        println!("[RUST] Writing {} price entries for: {}", entries.len(), symbol);
+        let csv_content = build_price_csv_content(entries);
+        persist_price_file_content(&app_handle, &symbol, &csv_content)?;
+        println!("[RUST] ✓ Successfully wrote price file for: {}", symbol);
+    } else {
+        eprintln!("[RUST] ⚠ No price data found for: {}", symbol);
+    }
+    
+    Ok(())
 }
 
 #[tauri::command]
@@ -989,6 +1229,8 @@ fn load_price_history_for_symbol(
             high,
             low,
             volume,
+            adjusted_close: None,
+            split_unadjusted_close: None,
             source,
         });
     }
@@ -1179,6 +1421,8 @@ fn load_price_records(app_handle: &tauri::AppHandle) -> Result<Vec<PriceRecordEn
                 high,
                 low,
                 volume,
+                adjusted_close: None,
+                split_unadjusted_close: None,
                 source,
             });
         }
@@ -1240,7 +1484,7 @@ fn sync_full_history(app_handle: &tauri::AppHandle) -> Result<(), String> {
             app_handle,
             &format!("Syncing history for {} from {}", symbol, date),
         )?;
-        match ensure_history_for_symbol(&mut price_map, symbol, *date) {
+        match ensure_history_for_symbol(app_handle, &mut price_map, symbol, *date) {
             Ok(()) => {
                 write_worker_log(app_handle, &format!("Finished {}", symbol))?;
             }
@@ -1858,11 +2102,15 @@ fn main() {
             write_split_file,
             read_split_file,
             list_split_files,
+            write_dividend_file,
+            read_dividend_file,
+            list_dividend_files,
             write_fx_rate_file,
             read_fx_rate_file,
             read_fx_rate_file_head,
             list_fx_rate_files,
             sync_history_once,
+            download_symbol_history,
             start_history_worker,
             get_history_log,
             proxy_get,
