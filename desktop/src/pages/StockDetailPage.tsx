@@ -1640,6 +1640,7 @@ export function StockDetailPage() {
                       <thead>
                         <DividendRow>
                           <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.85rem', color: '#64748b' }}>Period</th>
+                          <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.85rem', color: '#64748b' }}>Count</th>
                           <th style={{ textAlign: 'right', padding: '12px 16px', fontSize: '0.85rem', color: '#64748b' }}>Amount</th>
                         </DividendRow>
                       </thead>
@@ -1647,7 +1648,8 @@ export function StockDetailPage() {
                         {(dividendPeriodMode === 'year' ? dividendSummary.perYearTotals : dividendSummary.perQuarterTotals).map((item) => (
                           <DividendRow key={item.period}>
                             <DividendCell>{item.period}</DividendCell>
-                            <DividendCell>{currencySymbol}{item.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</DividendCell>
+                            <DividendCell style={{ textAlign: 'center' }}>{item.count}</DividendCell>
+                            <DividendCell style={{ textAlign: 'right' }}>{currencySymbol}{item.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</DividendCell>
                           </DividendRow>
                         ))}
                       </tbody>

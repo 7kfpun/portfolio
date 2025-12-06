@@ -129,7 +129,7 @@ export function calculateStockMetrics(
   fiveYearsAgo.setFullYear(fiveYearsAgo.getFullYear() - 5);
   const fiveYearHistory = priceHistory.filter(p => new Date(p.date) >= fiveYearsAgo);
   // specific metrics check if enough data is available (needs at least 2 points)
-  const metricHistory = fiveYearHistory.length >= 2 ? fiveYearHistory : priceHistory; 
+  const metricHistory = fiveYearHistory.length >= 2 ? fiveYearHistory : priceHistory;
 
   const priceVolatility = calculateVolatility(metricHistory);
   const { amount: maxDrawdown, percent: maxDrawdownPercent } = calculateMaxDrawdown(metricHistory);
@@ -142,12 +142,12 @@ export function calculateStockMetrics(
   for (let i = 1; i < metricHistory.length; i++) {
     const dailyChange = metricHistory[i].close - metricHistory[i - 1].close;
     if (dailyChange > bestDayGain) {
-        bestDayGain = dailyChange;
-        bestDayGainDate = metricHistory[i].date;
+      bestDayGain = dailyChange;
+      bestDayGainDate = metricHistory[i].date;
     }
     if (dailyChange < worstDayLoss) {
-        worstDayLoss = dailyChange;
-        worstDayLossDate = metricHistory[i].date;
+      worstDayLoss = dailyChange;
+      worstDayLossDate = metricHistory[i].date;
     }
   }
 
@@ -342,7 +342,7 @@ export function buildChartData(
     chartData.push({
       date: record.date,
       close: record.close,
-      unadjustedClose: record.split_unadjusted_close,
+      unadjustedClose: record.close,
       costBasis,
       volume: record.volume ?? null,
       shares: runningShares,

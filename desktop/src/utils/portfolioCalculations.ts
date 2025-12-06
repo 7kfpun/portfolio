@@ -56,7 +56,7 @@ export function calculatePositions(transactions: Transaction[]): Position[] {
     }
   }
 
-  return Array.from(positionMap.values());
+  return Array.from(positionMap.values()).filter(position => position.shares > 0);
 }
 
 export function calculatePortfolioSummary(

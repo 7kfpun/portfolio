@@ -505,15 +505,9 @@ export function DataReadinessPage() {
     const data = slice.map(record => ({
       date: record.date,
       close: record.close,
-      adjusted_close: record.adjusted_close,
-      split_unadjusted_close: record.split_unadjusted_close,
     }));
 
-    const allValues = data.flatMap(d => [
-      d.close,
-      d.adjusted_close,
-      d.split_unadjusted_close
-    ].filter((v): v is number => v !== undefined && v !== null));
+    const allValues = data.flatMap(d => [d.close]).filter((v): v is number => v !== undefined && v !== null);
 
     const min = Math.min(...allValues);
     const max = Math.max(...allValues);
@@ -818,8 +812,8 @@ export function DataReadinessPage() {
                                           formatter={(value, name) => [
                                             formatPrice(value as number, 4),
                                             name === 'close' ? 'Close' :
-                                            name === 'adjusted_close' ? 'Adj Close' :
-                                            name === 'split_unadjusted_close' ? 'Split Unadj' : name
+                                              name === 'adjusted_close' ? 'Adj Close' :
+                                                name === 'split_unadjusted_close' ? 'Split Unadj' : name
                                           ]}
                                           labelFormatter={value => value}
                                         />
