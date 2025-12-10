@@ -72,6 +72,7 @@ describe('SettingsService', () => {
 
       expect(result).toEqual({
         baseCurrency: 'TWD',
+        privacyMode: false,
       });
     });
 

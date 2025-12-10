@@ -23,13 +23,18 @@ export class SettingsService {
 
   async loadSettings(): Promise<AppSettings> {
     const baseCurrency = await this.getSetting('baseCurrency');
+    const privacyMode = await this.getSetting('privacyMode');
     return {
       baseCurrency: (baseCurrency as 'USD' | 'TWD' | 'JPY' | 'HKD') || 'USD',
+      privacyMode: privacyMode === 'true',
     };
   }
 
   async saveSettings(settings: AppSettings): Promise<void> {
     await this.setSetting('baseCurrency', settings.baseCurrency);
+    if (settings.privacyMode !== undefined) {
+      await this.setSetting('privacyMode', settings.privacyMode.toString());
+    }
   }
 }
 

@@ -74,7 +74,9 @@ export const useStockDetailStore = create<StockDetailState>((set, get) => ({
         priceCount: stockData.priceHistory.length,
         firstPrice: stockData.priceHistory[0],
         lastPrice: stockData.priceHistory[stockData.priceHistory.length - 1],
-        transactionCount: stockTransactions.length
+        transactionCount: stockTransactions.length,
+        splitsCount: stockData.splits.length,
+        splits: stockData.splits,
       });
 
       const chartData = buildChartData(stockData.priceHistory, stockData.transactions, stockData.splits);

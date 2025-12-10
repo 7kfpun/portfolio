@@ -1,5 +1,6 @@
 import styled from 'styled-components';
 import { CurrencyType } from '../types/Settings';
+import { CURRENCIES } from '../config/currencies';
 import { DollarSign } from 'lucide-react';
 
 const SelectorContainer = styled.div`
@@ -49,13 +50,6 @@ const Select = styled.select`
     padding: 0.45rem 1.75rem 0.45rem 0.65rem;
   }
 `;
-
-const CURRENCIES: { code: CurrencyType; symbol: string; name: string }[] = [
-  { code: 'USD', symbol: '$', name: 'US Dollar' },
-  { code: 'TWD', symbol: 'NT$', name: 'Taiwan Dollar' },
-  { code: 'JPY', symbol: '¥', name: 'Japanese Yen' },
-  { code: 'HKD', symbol: 'HK$', name: 'Hong Kong Dollar' },
-];
 
 interface CurrencySelectorProps {
   value: CurrencyType;

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { createChart, ColorType, IChartApi, HistogramSeriesPartialOptions } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, HistogramSeries } from 'lightweight-charts';
 import styled from 'styled-components';
 import { DividendPeriodSummary } from '../types/StockDetail';
 
@@ -72,10 +72,11 @@ export const DividendChart: React.FC<DividendChartProps> = ({ data, periodMode, 
     // Sort data chronologically for the chart
     const sortedData = [...data].sort((a, b) => a.period.localeCompare(b.period));
 
-    const histogramSeries = (chart as any).addHistogramSeries({
+    // v5 API - use addSeries with series type
+    const histogramSeries = chart.addSeries(HistogramSeries, {
       color: '#10b981',
       priceFormat: {
-        type: 'volume', // Just prevents formatting issues, we'll use custom formatter if needed
+        type: 'volume',
       },
     });
 

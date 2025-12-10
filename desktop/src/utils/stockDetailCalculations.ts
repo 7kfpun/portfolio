@@ -315,6 +315,18 @@ export function buildChartData(
 ): ChartDataPoint[] {
   const costBasisMap = calculateCostBasisTimeSeries(transactions, splits);
   const sortedTransactions = [...transactions].sort((a, b) => a.date.localeCompare(b.date));
+  const sortedSplits = [...splits].sort((a, b) => a.date.localeCompare(b.date));
+
+  console.log('[buildChartData] Starting with:', {
+    priceHistoryCount: priceHistory.length,
+    transactionsCount: transactions.length,
+    splitsCount: splits.length,
+    firstSplit: sortedSplits[0],
+    lastSplit: sortedSplits[sortedSplits.length - 1],
+  });
+
+  console.warn('🔍 DEBUGGING: buildChartData called with', splits.length, 'splits');
+
   const chartData: ChartDataPoint[] = [];
   let txnIndex = 0;
   let runningShares = 0;
@@ -327,11 +339,15 @@ export function buildChartData(
 
       if (type === 'buy' || type === 'purchase') {
         runningShares += quantity;
+        console.log(`  [${txn.date}] BUY ${quantity} shares, total: ${runningShares}`);
       } else if (type === 'sell' || type === 'sale') {
         runningShares -= quantity;
+        console.log(`  [${txn.date}] SELL ${quantity} shares, total: ${runningShares}`);
       } else if (type === 'split' || type.includes('split')) {
         const splitRatio = parseNumericString(txn.split_ratio, 1);
+        const oldShares = runningShares;
         runningShares *= splitRatio;
+        console.log(`  [${txn.date}] SPLIT ${splitRatio}:1, shares: ${oldShares} -> ${runningShares}`);
       }
 
       txnIndex += 1;
@@ -348,6 +364,50 @@ export function buildChartData(
       shares: runningShares,
     });
   }
+
+  console.log('[buildChartData] Before split adjustments:', {
+    firstDataPoint: chartData[0],
+    lastDataPoint: chartData[chartData.length - 1],
+    sampleMidPoint: chartData[Math.floor(chartData.length / 2)],
+  });
+
+  // Apply split adjustments retroactively to historical positions
+  // Work backwards through splits to adjust share counts before each split
+  console.log('[buildChartData] Applying split adjustments:', {
+    splitsCount: sortedSplits.length,
+    splits: sortedSplits,
+    chartDataLength: chartData.length,
+  });
+
+  for (let i = sortedSplits.length - 1; i >= 0; i--) {
+    const split = sortedSplits[i];
+    const splitRatio = split.ratio;
+
+    console.log(`[buildChartData] Processing split ${i}:`, {
+      splitDate: split.date,
+      splitRatio: splitRatio,
+    });
+
+    let adjustedCount = 0;
+    // Find all chart data points before this split date and adjust their shares
+    for (let j = 0; j < chartData.length; j++) {
+      if (chartData[j].date < split.date) {
+        const oldShares = chartData[j].shares;
+        chartData[j].shares = (chartData[j].shares || 0) * splitRatio;
+        adjustedCount++;
+        if (j < 3) { // Log first few adjustments
+          console.log(`  Adjusted point ${j}: ${oldShares} -> ${chartData[j].shares} (date: ${chartData[j].date})`);
+        }
+      }
+    }
+    console.log(`  Total adjusted points: ${adjustedCount}`);
+  }
+
+  console.log('[buildChartData] After split adjustments:', {
+    firstDataPoint: chartData[0],
+    lastDataPoint: chartData[chartData.length - 1],
+    sampleMidPoint: chartData[Math.floor(chartData.length / 2)],
+  });
 
   return chartData;
 }

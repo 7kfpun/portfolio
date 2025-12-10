@@ -4,10 +4,11 @@ import { usePortfolioStore } from '../store/portfolioStore';
 import { useTransactionsStore } from '../store/transactionsStore';
 import { priceDataService } from '../services/priceDataService';
 import { TrendingUp, TrendingDown, DollarSign, Calendar } from 'lucide-react';
-import { Container, Header, Meta, Title, Description, Card, LoadingText } from '../components/PageLayout';
+import { Container, Header, HeaderRow, HeaderLeft, HeaderRight, Meta, Title, Description, Card, LoadingText, PageHeaderControls } from '../components/PageLayout';
 import { Stats, StatCardComponent } from '../components/StatsCards';
 import { Position } from '../types/Portfolio';
 import { PriceRecord } from '../types/PriceData';
+import { CURRENCY_COLORS } from '../config/currencies';
 
 const HeatmapGrid = styled.div`
   display: grid;
@@ -211,45 +212,11 @@ const Td = styled.td`
   }
 `;
 
-const PercentageCell = styled(Td)<{ $positive: boolean }>`
+const PercentageCell = styled(Td) <{ $positive: boolean }>`
   font-weight: 600;
   color: ${props => props.$positive ? '#16a34a' : '#dc2626'};
 `;
 
-const TabContainer = styled.div`
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-  border-bottom: 2px solid #e2e8f0;
-`;
-
-const Tab = styled.button<{ $active: boolean }>`
-  padding: 0.75rem 1.5rem;
-  border: none;
-  background: ${props => props.$active ? '#667eea' : 'transparent'};
-  color: ${props => props.$active ? 'white' : '#64748b'};
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 150ms ease;
-  border-radius: 8px 8px 0 0;
-
-  &:hover {
-    background: ${props => props.$active ? '#667eea' : '#f1f5f9'};
-    color: ${props => props.$active ? 'white' : '#475569'};
-  }
-
-  @media (max-width: 768px) {
-    padding: 0.5rem 1rem;
-    font-size: 0.85rem;
-  }
-`;
-
-const CURRENCY_COLORS: Record<string, string> = {
-  USD: '#2563eb',
-  TWD: '#dc2626',
-  JPY: '#16a34a',
-  HKD: '#fb923c',
-};
 
 interface StockData extends Position {
   size: number;
@@ -257,17 +224,15 @@ interface StockData extends Position {
   dailyGainLossPercent: number;
 }
 
-export function HeatmapPage() {
+export function HeatmapsPage() {
   const transactions = useTransactionsStore(state => state.transactions);
   const loadingTransactions = useTransactionsStore(state => state.loading);
   const loadTransactions = useTransactionsStore(state => state.loadTransactions);
 
   const positions = usePortfolioStore(state => state.positions);
   const calculatePortfolio = usePortfolioStore(state => state.calculatePortfolio);
-  const loadingPrices = usePortfolioStore(state => state.loadingPrices);
-  const refreshPrices = usePortfolioStore(state => state.refreshPrices);
+  const loading = usePortfolioStore(state => state.loading);
 
-  const [activeTab, setActiveTab] = useState<'heatmap' | 'table'>('heatmap');
   const [historicalPrices, setHistoricalPrices] = useState<Map<string, PriceRecord[]>>(new Map());
 
   useEffect(() => {
@@ -393,15 +358,7 @@ export function HeatmapPage() {
     return { totalValue, totalGain, totalGainPercent, gainers, losers, neutral, totalDailyGain, totalDailyGainPercent };
   }, [positions, stocksByCurrency]);
 
-  const allStocks = useMemo(() => {
-    const stocks: StockData[] = [];
-    stocksByCurrency.forEach(stockList => {
-      stocks.push(...stockList);
-    });
-    return stocks.sort((a, b) => Math.abs(b.dailyGainLoss) - Math.abs(a.dailyGainLoss));
-  }, [stocksByCurrency]);
-
-  if (loadingTransactions || loadingPrices) {
+  if (loadingTransactions || loading) {
     return (
       <Container>
         <Card>
@@ -414,11 +371,18 @@ export function HeatmapPage() {
   return (
     <Container>
       <Header>
-        <Meta>Portfolio Visualization</Meta>
-        <Title>Portfolio Heatmap</Title>
-        <Description>
-          Visual representation of your holdings performance
-        </Description>
+        <HeaderRow>
+          <HeaderLeft>
+            <Meta>Portfolio Visualization</Meta>
+            <Title>Heatmap</Title>
+            <Description>
+              Visual representation of your holdings performance
+            </Description>
+          </HeaderLeft>
+          <HeaderRight>
+            <PageHeaderControls />
+          </HeaderRight>
+        </HeaderRow>
       </Header>
 
       <Stats>
@@ -457,159 +421,77 @@ export function HeatmapPage() {
       </Stats>
 
       <Card>
-        <TabContainer>
-          <Tab $active={activeTab === 'heatmap'} onClick={() => setActiveTab('heatmap')}>
-            Heatmap View
-          </Tab>
-          <Tab $active={activeTab === 'table'} onClick={() => setActiveTab('table')}>
-            Table View
-          </Tab>
-        </TabContainer>
+        {Array.from(stocksByCurrency.entries()).map(([currency, stocks]) => (
+          <CurrencySection key={currency}>
+            <CurrencyTitle $color={CURRENCY_COLORS[currency] || '#64748b'}>
+              {currency} Holdings ({stocks.length})
+            </CurrencyTitle>
+            <HeatmapGrid>
+              {stocks.map(stock => {
+                const percentChange = stock.gainLossPercent || 0;
+                const currentValue = stock.currentValue || stock.totalCost;
 
-        {activeTab === 'heatmap' ? (
-          <>
-            {Array.from(stocksByCurrency.entries()).map(([currency, stocks]) => (
-              <CurrencySection key={currency}>
-                <CurrencyTitle $color={CURRENCY_COLORS[currency] || '#64748b'}>
-                  {currency} Holdings ({stocks.length})
-                </CurrencyTitle>
-                <HeatmapGrid>
-                  {stocks.map(stock => {
-                    const percentChange = stock.gainLossPercent || 0;
-                    const currentValue = stock.currentValue || stock.totalCost;
-
-                    return (
-                      <StockCell
-                        key={stock.stock}
-                        $percentChange={percentChange}
-                        $size={stock.size}
-                      >
-                        <div>
-                          <StockSymbol>{stock.stock}</StockSymbol>
-                          <StockShares>{stock.shares.toLocaleString()} shares</StockShares>
-                        </div>
-                        <div>
-                          <StockValue>
-                            ${currentValue.toLocaleString(undefined, {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
-                          </StockValue>
-                          <StockChange>
-                            {percentChange >= 0 ? '+' : ''}
-                            {percentChange.toFixed(2)}%
-                          </StockChange>
-                          <StockDailyChange $positive={stock.dailyGainLoss >= 0}>
-                            Day: {stock.dailyGainLoss >= 0 ? '+' : ''}
-                            {stock.dailyGainLossPercent.toFixed(2)}%
-                          </StockDailyChange>
-                        </div>
-                      </StockCell>
-                    );
-                  })}
-                </HeatmapGrid>
-              </CurrencySection>
-            ))}
-
-            {stocksByCurrency.size === 0 && (
-              <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
-                No positions found. Add transactions to see your portfolio heatmap.
-              </div>
-            )}
-
-            <Legend>
-              <LegendLabel>Performance:</LegendLabel>
-              <LegendGradient>
-                <LegendCell $color="#fee2e2" />
-                <LegendCell $color="#fca5a5" />
-                <LegendCell $color="#dc2626" />
-                <span>Strong Loss</span>
-              </LegendGradient>
-              <LegendGradient>
-                <LegendCell $color="#e2e8f0" />
-                <span>Neutral</span>
-              </LegendGradient>
-              <LegendGradient>
-                <span>Strong Gain</span>
-                <LegendCell $color="#86efac" />
-                <LegendCell $color="#4ade80" />
-                <LegendCell $color="#16a34a" />
-              </LegendGradient>
-              <div style={{ marginLeft: 'auto', fontSize: '0.75rem', opacity: 0.7 }}>
-                Cell size represents portfolio weight
-              </div>
-            </Legend>
-          </>
-        ) : (
-          <TableContainer>
-            <Table>
-              <thead>
-                <tr>
-                  <Th>Symbol</Th>
-                  <Th>Currency</Th>
-                  <Th>Shares</Th>
-                  <Th>Current Price</Th>
-                  <Th>Current Value</Th>
-                  <Th>Total Gain/Loss</Th>
-                  <Th>Daily Change</Th>
-                  <Th>Daily Gain/Loss</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {allStocks.map(stock => {
-                  const currentValue = stock.currentValue || stock.totalCost;
-                  const totalGainLoss = stock.gainLoss || 0;
-                  const totalGainLossPercent = stock.gainLossPercent || 0;
-
-                  return (
-                    <tr key={stock.stock}>
-                      <Td style={{ fontWeight: 600 }}>{stock.stock}</Td>
-                      <Td>
-                        <span style={{ color: CURRENCY_COLORS[stock.currency] || '#64748b', fontWeight: 600 }}>
-                          {stock.currency}
-                        </span>
-                      </Td>
-                      <Td>{stock.shares.toLocaleString()}</Td>
-                      <Td>
-                        ${(stock.currentPrice || 0).toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </Td>
-                      <Td>
+                return (
+                  <StockCell
+                    key={stock.stock}
+                    $percentChange={percentChange}
+                    $size={stock.size}
+                  >
+                    <div>
+                      <StockSymbol>{stock.stock}</StockSymbol>
+                      <StockShares>{stock.shares.toLocaleString()} shares</StockShares>
+                    </div>
+                    <div>
+                      <StockValue>
                         ${currentValue.toLocaleString(undefined, {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
                         })}
-                      </Td>
-                      <PercentageCell $positive={totalGainLoss >= 0}>
-                        {totalGainLoss >= 0 ? '+' : ''}${Math.abs(totalGainLoss).toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })} ({totalGainLoss >= 0 ? '+' : ''}{totalGainLossPercent.toFixed(2)}%)
-                      </PercentageCell>
-                      <PercentageCell $positive={stock.dailyGainLossPercent >= 0}>
-                        {stock.dailyGainLossPercent >= 0 ? '+' : ''}{stock.dailyGainLossPercent.toFixed(2)}%
-                      </PercentageCell>
-                      <PercentageCell $positive={stock.dailyGainLoss >= 0}>
-                        {stock.dailyGainLoss >= 0 ? '+' : ''}${Math.abs(stock.dailyGainLoss).toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </PercentageCell>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </Table>
+                      </StockValue>
+                      <StockChange>
+                        {percentChange >= 0 ? '+' : ''}
+                        {percentChange.toFixed(2)}%
+                      </StockChange>
+                      <StockDailyChange $positive={stock.dailyGainLoss >= 0}>
+                        Day: {stock.dailyGainLoss >= 0 ? '+' : ''}
+                        {stock.dailyGainLossPercent.toFixed(2)}%
+                      </StockDailyChange>
+                    </div>
+                  </StockCell>
+                );
+              })}
+            </HeatmapGrid>
+          </CurrencySection>
+        ))}
 
-            {allStocks.length === 0 && (
-              <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
-                No positions found. Add transactions to see your portfolio data.
-              </div>
-            )}
-          </TableContainer>
+        {stocksByCurrency.size === 0 && (
+          <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
+            No positions found. Add transactions to see your portfolio heatmap.
+          </div>
         )}
+
+        <Legend>
+          <LegendLabel>Performance:</LegendLabel>
+          <LegendGradient>
+            <LegendCell $color="#fee2e2" />
+            <LegendCell $color="#fca5a5" />
+            <LegendCell $color="#dc2626" />
+            <span>Strong Loss</span>
+          </LegendGradient>
+          <LegendGradient>
+            <LegendCell $color="#e2e8f0" />
+            <span>Neutral</span>
+          </LegendGradient>
+          <LegendGradient>
+            <span>Strong Gain</span>
+            <LegendCell $color="#86efac" />
+            <LegendCell $color="#4ade80" />
+            <LegendCell $color="#16a34a" />
+          </LegendGradient>
+          <div style={{ marginLeft: 'auto', fontSize: '0.75rem', opacity: 0.7 }}>
+            Cell size represents portfolio weight
+          </div>
+        </Legend>
       </Card>
     </Container>
   );

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { useStockDetailStore } from '../store/stockDetailStore';
 import { useNavigationStore } from '../store/navigationStore';
+import { useSettingsStore } from '../store/settingsStore';
 import {
   ArrowLeft,
   TrendingUp,
@@ -19,18 +20,19 @@ import {
   SeriesMarkerPosition,
   SeriesMarkerShape,
   UTCTimestamp,
+  AreaSeries,
+  LineSeries,
+  HistogramSeries,
 } from 'lightweight-charts';
-import { AdvancedTable, Column } from '../components/AdvancedTable';
+import { TanStackTable } from '../components/TanStackTable';
+import { createColumnHelper } from '@tanstack/react-table';
+import { MetricCard } from '../components/MetricCard';
+import { PageHeaderControls } from '../components/PageLayout';
 import { YahooMeta } from '../types/YahooMeta';
 import { DividendChart } from '../components/DividendChart';
 import { TransactionEvent } from '../types/StockDetail';
-
-const CURRENCY_SYMBOLS: Record<string, string> = {
-  USD: '$',
-  TWD: 'NT$',
-  JPY: '¥',
-  HKD: 'HK$',
-};
+import { CURRENCY_SYMBOLS } from '../config/currencies';
+import { CurrencyType } from '../types/Settings';
 
 const EVENT_VISUALS: Record<
   TransactionEvent['type'],
@@ -137,93 +139,6 @@ const BigMetricSubValue = styled.span<{ $positive?: boolean }>`
   font-size: 1.125rem;
   font-weight: 600;
   color: ${props => props.$positive ? '#10b981' : '#ef4444'};
-`;
-
-const CardHeader = styled.div`
-  padding: 16px 20px;
-  font-weight: 600;
-  color: #0f172a;
-  /* border-bottom: 1px solid #e2e8f0; Removed per request */
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-`;
-
-const MetricLabelContainer = styled.span`
-  display: flex;
-  align-items: center;
-  gap: 6px;
-`;
-
-const HelpIconWrapper = styled.span`
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #94a3b8;
-  cursor: help;
-  
-  &:hover {
-    color: #64748b;
-  }
-`;
-
-const MetricsTable = styled.table`
-  width: 100%;
-  height: 100%; /* Fill the grid cell height */
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  border-collapse: collapse;
-  overflow: hidden;
-  display: flex;       /* Use flex column to distribute rows */
-  flex-direction: column;
-`;
-
-const MetricRow = styled.tr`
-  border-bottom: 1px solid #e2e8f0;
-  display: flex;       /* Table rows as flex containers */
-  width: 100%; 
-  justify-content: space-between;
-
-  &:last-child {
-    border-bottom: none;
-    flex: 1;           /* Last item can fill remaining space if needed, or we just rely on padding */
-  }
-
-  &:hover {
-    background: #f8fafc;
-  }
-`;
-
-const MetricLabel = styled.td`
-  padding: 0.875rem 1.25rem;
-  font-size: 0.9rem;
-  color: #64748b;
-  font-weight: 500;
-  /* width: 40%; Remove fixed width logic if using flex row */
-  display: block;
-`;
-
-const MetricValue = styled.td<{ $color?: string }>`
-  padding: 0.875rem 1.25rem;
-  font-size: 1rem;
-  font-weight: 600;
-  color: ${props => props.$color || '#0f172a'};
-  text-align: right;
-  display: block;
-`;
-
-const MetricValueWithChange = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.5rem;
-`;
-
-const MetricChange = styled.span<{ $positive?: boolean }>`
-  font-size: 0.875rem;
-  color: ${props => props.$positive ? '#10b981' : '#ef4444'};
-  font-weight: 500;
 `;
 
 const ChartSection = styled.div`
@@ -418,39 +333,9 @@ const DividendMetricGrid = styled.div`
   }
 `;
 
-const DividendMetricCard = styled.div`
-  background: white;
-  padding: 1.25rem;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-`;
-
-const DividendMetricTitle = styled.div`
-  font-size: 0.9rem;
-  color: #64748b;
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-`;
-
-const DividendMetricValue = styled.div`
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: #0f172a;
-`;
-
-const DividendMetricSub = styled.div`
-  font-size: 0.85rem;
-  color: #64748b;
-`;
-
 const DividendVisualsContainer = styled.div`
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 1.5rem;
   
   @media (max-width: 1024px) {
@@ -474,70 +359,6 @@ const DividendPanelHeader = styled.div`
   display: flex;
   justify-content: space-between;
   align-items: center;
-`;
-
-const DividendLayout = styled.div`
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 1.5rem;
-  margin-top: 1.5rem;
-`;
-
-const DividendTableContainer = styled.div`
-  background: #f8fafc;
-  border-radius: 14px;
-  padding: 1.25rem 1.5rem;
-  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  height: 100%;
-`;
-
-const DividendDistributionHeader = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-`;
-
-const DividendScrollArea = styled.div`
-  border-radius: 10px;
-  border: 1px solid #e2e8f0;
-  overflow: hidden;
-`;
-
-const DividendScrollInner = styled.div`
-  max-height: 260px;
-  overflow-y: auto;
-  background: white;
-`;
-
-const DividendTable = styled.table`
-  width: 100%;
-  border-collapse: collapse;
-`;
-
-const DividendRow = styled.tr`
-  border-bottom: 1px solid #e2e8f0;
-
-  &:last-child {
-    border-bottom: none;
-  }
-
-  &:hover {
-    background: #eef2ff;
-  }
-`;
-
-const DividendCell = styled.td`
-  padding: 0.9rem 1rem;
-  color: #475569;
-  font-size: 0.9rem;
-
-  &:first-child {
-    font-weight: 600;
-    color: #0f172a;
-  }
 `;
 
 const DividendPeriodToggle = styled.div`
@@ -577,6 +398,7 @@ const ErrorContainer = styled.div`
 
 export function StockDetailPage() {
   const { selectedStock, goBackToPortfolio } = useNavigationStore();
+  const privacyMode = useSettingsStore(state => state.privacyMode);
   const {
     stockData,
     chartData,
@@ -598,7 +420,7 @@ export function StockDetailPage() {
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const positionSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
 
-  const navSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
+  const navSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const [markerTooltipState, setMarkerTooltipState] = useState({
     visible: false,
     x: 0,
@@ -649,57 +471,78 @@ export function StockDetailPage() {
     };
   }, [selectedStock, loadStockDetail, clearStockDetail]);
 
-  const currencySymbol = stockData ? CURRENCY_SYMBOLS[stockData.currency] || '$' : '$';
+  const currencySymbol = stockData ? CURRENCY_SYMBOLS[stockData.currency as CurrencyType] || '$' : '$';
 
-  const transactionColumns = useMemo<Column<TransactionEvent>[]>(() => [
-    {
-      key: 'date',
+  // Transaction columns using TanStack Table
+  const transactionColumnHelper = createColumnHelper<TransactionEvent>();
+  const transactionColumns = useMemo(() => [
+    transactionColumnHelper.accessor('date', {
       header: 'Date',
-      accessor: (row) => row.date,
-      width: 120,
-    },
-    {
-      key: 'type',
+      cell: (info) => info.getValue(),
+      enableSorting: true,
+    }),
+    transactionColumnHelper.accessor('type', {
       header: 'Type',
-      accessor: (row) => (
-        <span style={{
-          color: row.type === 'buy' ? '#16a34a' : row.type === 'sell' ? '#dc2626' : row.type === 'dividend' ? '#2563eb' : '#f59e0b',
-          fontWeight: 500,
-        }}>
-          {row.type.charAt(0).toUpperCase() + row.type.slice(1)}
-        </span>
-      ),
-      width: 100,
-    },
-    {
-      key: 'quantity',
+      cell: (info) => {
+        const type = info.getValue();
+        return (
+          <span style={{
+            color: type === 'buy' ? '#16a34a' : type === 'sell' ? '#dc2626' : type === 'dividend' ? '#2563eb' : '#f59e0b',
+            fontWeight: 500,
+          }}>
+            {type.charAt(0).toUpperCase() + type.slice(1)}
+          </span>
+        );
+      },
+      enableSorting: true,
+    }),
+    transactionColumnHelper.accessor('quantity', {
       header: 'Quantity',
-      accessor: (row) => formatShareValue(row.quantity),
-      align: 'right',
-      width: 100,
-    },
-    {
-      key: 'price',
+      cell: (info) => privacyMode ? '***' : formatShareValue(info.getValue()),
+      enableSorting: true,
+      meta: { cellStyle: { textAlign: 'right' } },
+    }),
+    transactionColumnHelper.accessor('price', {
       header: 'Price',
-      accessor: (row) => `${currencySymbol}${row.price.toFixed(2)}`,
-      align: 'right',
-      width: 120,
-    },
-    {
-      key: 'amount',
+      cell: (info) => privacyMode ? '***' : `${currencySymbol}${info.getValue().toFixed(2)}`,
+      enableSorting: true,
+      meta: { cellStyle: { textAlign: 'right' } },
+    }),
+    transactionColumnHelper.accessor('amount', {
       header: 'Amount',
-      accessor: (row) => `${currencySymbol}${row.amount.toFixed(2)}`,
-      align: 'right',
-      width: 120,
-    },
-    {
-      key: 'sharesAfter',
+      cell: (info) => privacyMode ? '***' : `${currencySymbol}${info.getValue().toFixed(2)}`,
+      enableSorting: true,
+      meta: { cellStyle: { textAlign: 'right' } },
+    }),
+    transactionColumnHelper.accessor('sharesAfter', {
       header: 'Shares After',
-      accessor: (row) => formatShareValue(row.sharesAfter),
-      align: 'right',
-      width: 120,
-    },
-  ], [currencySymbol]);
+      cell: (info) => privacyMode ? '***' : formatShareValue(info.getValue()),
+      enableSorting: true,
+      meta: { cellStyle: { textAlign: 'right' } },
+    }),
+  ], [currencySymbol, privacyMode]);
+
+  // Dividend summary table columns using TanStack Table
+  const dividendColumnHelper = createColumnHelper<{ period: string; count: number; total: number }>();
+  const dividendTableColumns = useMemo(() => [
+    dividendColumnHelper.accessor('period', {
+      header: 'Period',
+      cell: (info) => info.getValue(),
+      enableSorting: true,
+    }),
+    dividendColumnHelper.accessor('count', {
+      header: 'Count',
+      cell: (info) => info.getValue().toString(),
+      enableSorting: true,
+      meta: { cellStyle: { textAlign: 'center' } },
+    }),
+    dividendColumnHelper.accessor('total', {
+      header: 'Amount',
+      cell: (info) => privacyMode ? '***' : `${currencySymbol}${info.getValue().toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      enableSorting: true,
+      meta: { cellStyle: { textAlign: 'right' } },
+    }),
+  ], [currencySymbol, privacyMode]);
 
   const viewRangeStartDate = useMemo(() => {
     if (!chartData.length) return null;
@@ -729,6 +572,11 @@ export function StockDetailPage() {
         startDate.setDate(1);
         break;
       case '1Y':
+        startDate.setFullYear(startDate.getFullYear() - 1);
+        break;
+      case '5Y':
+        startDate.setFullYear(startDate.getFullYear() - 5);
+        break;
       default:
         startDate.setFullYear(startDate.getFullYear() - 1);
         break;
@@ -794,13 +642,213 @@ export function StockDetailPage() {
       case '6M': return 'in the past 6 months';
       case 'YTD': return 'year to date';
       case '1Y': return 'in the past year';
+      case '5Y': return 'in the past 5 years';
       case 'ALL': return 'all time';
       default: return '';
     }
   }, [chartTimeRange]);
 
-  const markerDetails = useMemo(() => {
-    if (!chartData.length || !showEventMarkers) return new Map<UTCTimestamp, TransactionEvent>();
+  // Prepare metrics data for MetricCard components
+  const portfolioOverviewMetrics = useMemo(() => {
+    if (!stockData || !metrics) return [];
+
+    return [
+      {
+        label: 'Current Price',
+        value: privacyMode ? '***' : `${currencySymbol}${stockData.position.currentPrice?.toFixed(2) || 'N/A'}`,
+        helpText: 'Current market price per share',
+      },
+      {
+        label: 'Shares',
+        value: privacyMode ? '***' : stockData.position.shares.toString(),
+        helpText: 'Total number of shares held',
+      },
+      {
+        label: 'Average Cost',
+        value: privacyMode ? '***' : `${currencySymbol}${stockData.position.averageCost.toFixed(2)}`,
+        helpText: 'Average cost per share',
+      },
+      {
+        label: 'Holding Period',
+        value: `${metrics.holdingPeriodDays} days`,
+        helpText: 'Number of days since first purchase',
+      },
+    ];
+  }, [stockData, currencySymbol, metrics, privacyMode]);
+
+  const performanceMetrics = useMemo(() => {
+    if (!metrics) return [];
+
+    return [
+      {
+        label: 'Annualized Return',
+        value: `${metrics.annualizedReturn.toFixed(2)}%`,
+        valueColor: metrics.annualizedReturn >= 0 ? '#10b981' : '#ef4444',
+        helpText: 'Compound Annual Growth Rate of the investment based on holding period',
+      },
+      {
+        label: 'Max Drawdown (5Y)',
+        value: privacyMode ? (
+          <>{metrics.maxDrawdownPercent.toFixed(2)}%</>
+        ) : (
+          <>
+            {metrics.maxDrawdownPercent.toFixed(2)}%
+            <span style={{ fontSize: '0.85rem', opacity: 0.7, marginLeft: '6px', fontWeight: 500 }}>
+              ({currencySymbol}{metrics.maxDrawdown.toFixed(2)})
+            </span>
+          </>
+        ),
+        valueColor: '#ef4444',
+        helpText: 'Maximum observed loss from a peak to a trough within the last 5 years',
+      },
+      {
+        label: 'Volatility (5Y)',
+        value: `${metrics.priceVolatility.toFixed(2)}%`,
+        helpText: 'Annualized standard deviation of daily returns over the last 5 years',
+      },
+      {
+        label: 'Best Day Gain (5Y)',
+        value: privacyMode ? (
+          <>
+            ***
+            {metrics.bestDayGainDate && (
+              <span style={{ fontSize: '0.85rem', opacity: 0.7, marginLeft: '6px', color: '#64748b', fontWeight: 500 }}>
+                ({metrics.bestDayGainDate})
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            +{currencySymbol}{metrics.bestDayGain.toFixed(2)}
+            {metrics.bestDayGainDate && (
+              <span style={{ fontSize: '0.85rem', opacity: 0.7, marginLeft: '6px', color: '#64748b', fontWeight: 500 }}>
+                ({metrics.bestDayGainDate})
+              </span>
+            )}
+          </>
+        ),
+        valueColor: '#10b981',
+        helpText: 'Largest single-day gain within the last 5 years',
+      },
+      {
+        label: 'Worst Day Loss (5Y)',
+        value: privacyMode ? (
+          <>
+            ***
+            {metrics.worstDayLossDate && (
+              <span style={{ fontSize: '0.85rem', opacity: 0.7, marginLeft: '6px', color: '#64748b', fontWeight: 500 }}>
+                ({metrics.worstDayLossDate})
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            {currencySymbol}{metrics.worstDayLoss.toFixed(2)}
+            {metrics.worstDayLossDate && (
+              <span style={{ fontSize: '0.85rem', opacity: 0.7, marginLeft: '6px', color: '#64748b', fontWeight: 500 }}>
+                ({metrics.worstDayLossDate})
+              </span>
+            )}
+          </>
+        ),
+        valueColor: '#ef4444',
+        helpText: 'Largest single-day loss within the last 5 years',
+      },
+    ];
+  }, [metrics, currencySymbol, privacyMode]);
+
+  const marketDataMetrics = useMemo(() => {
+    if (!metrics) return [];
+
+    const baseMetrics = [];
+
+    if (yahooMeta) {
+      baseMetrics.push(
+        {
+          label: 'Market Price',
+          value: privacyMode ? '***' : `${currencySymbol}${yahooMeta.regularMarketPrice?.toFixed(2) || 'N/A'}`,
+          helpText: 'Regular market price from Yahoo Finance',
+        },
+        {
+          label: 'Day Range',
+          value: privacyMode ? '***' : `${currencySymbol}${yahooMeta.regularMarketDayLow?.toFixed(2)} - ${currencySymbol}${yahooMeta.regularMarketDayHigh?.toFixed(2)}`,
+          helpText: 'Lowest and Highest price of the current trading day',
+        },
+        {
+          label: '52 Week Range',
+          value: privacyMode ? '***' : `${currencySymbol}${yahooMeta.fiftyTwoWeekLow?.toFixed(2)} - ${currencySymbol}${yahooMeta.fiftyTwoWeekHigh?.toFixed(2)}`,
+          helpText: 'Lowest and Highest price over the last 52 weeks',
+        }
+      );
+    }
+
+    baseMetrics.push(
+      {
+        label: 'Highest Price',
+        value: privacyMode ? '***' : `${currencySymbol}${metrics.highestPrice.toFixed(2)}`,
+        helpText: 'Highest historical price observed in your data',
+      },
+      {
+        label: 'Lowest Price',
+        value: privacyMode ? '***' : `${currencySymbol}${metrics.lowestPrice.toFixed(2)}`,
+        helpText: 'Lowest historical price observed in your data',
+      }
+    );
+
+    if (yahooMeta) {
+      baseMetrics.push({
+        label: 'Volume',
+        value: yahooMeta.regularMarketVolume?.toLocaleString() || 'N/A',
+        helpText: 'Volume of shares traded',
+      });
+    }
+
+    return baseMetrics;
+  }, [yahooMeta, metrics, currencySymbol, privacyMode]);
+
+  const dividendMetrics = useMemo(() => {
+    if (!dividendSummary || dividendSummary.dividendCount === 0) return [];
+
+    return [
+      {
+        label: 'Total Dividends',
+        value: privacyMode ? (
+          <>
+            ***
+            <div style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 500, marginTop: '4px' }}>
+              {dividendSummary.dividendCount} payouts
+            </div>
+          </>
+        ) : (
+          <>
+            {currencySymbol}{dividendSummary.totalDividends.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            <div style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 500, marginTop: '4px' }}>
+              {dividendSummary.dividendCount} payouts
+            </div>
+          </>
+        ),
+        helpText: 'Sum of all dividend payouts received. Formula: Σ (Dividend Per Share × Shares Owned)',
+      },
+      {
+        label: 'Annual Yield',
+        value: (
+          <>
+            {dividendSummary.annualYield ? `${dividendSummary.annualYield.toFixed(2)}%` : '—'}
+            <div style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 500, marginTop: '4px' }}>
+              Last: {dividendSummary.lastDividendDate || 'N/A'}
+            </div>
+          </>
+        ),
+        helpText: 'Current annual dividend yield based on trailing 12-month payouts relative to current market price. Formula: (TTM Dividends / Current Price) × 100',
+      },
+      {
+        label: 'Average Payout',
+        value: privacyMode ? '***' : `${currencySymbol}${dividendSummary.averageDividend.toFixed(2)}`,
+        helpText: 'Average amount received per dividend distribution. Formula: Total Dividends / Count of Distributions',
+      },
+    ];
+  }, [dividendSummary, currencySymbol, privacyMode]); const markerDetails = useMemo(() => {
+    if (!chartData.length) return new Map<UTCTimestamp, TransactionEvent>();
     const map = new Map<UTCTimestamp, TransactionEvent>();
 
     transactionEvents.forEach(event => {
@@ -809,14 +857,12 @@ export function StockDetailPage() {
     });
 
     return map;
-  }, [transactionEvents, chartData, showEventMarkers]);
+  }, [transactionEvents, chartData]);
 
   const chartMarkers = useMemo<SeriesMarker<UTCTimestamp>[]>(() => {
     if (!chartData.length) return [];
 
-    if (!showEventMarkers) return [];
-
-    return transactionEvents.reduce<SeriesMarker<UTCTimestamp>[]>((markers, event) => {
+    const markers = transactionEvents.reduce<SeriesMarker<UTCTimestamp>[]>((markers, event) => {
       const markerConfig = EVENT_VISUALS[event.type];
       const label =
         event.type === 'buy' || event.type === 'sell'
@@ -834,7 +880,9 @@ export function StockDetailPage() {
 
       return markers;
     }, []);
-  }, [transactionEvents, markerDetails, showEventMarkers]);
+
+    return markers;
+  }, [transactionEvents, markerDetails]);
 
   const navSeriesData = useMemo(() => {
     return navChartData.map(point => ({
@@ -859,10 +907,12 @@ export function StockDetailPage() {
   }, [chartData]);
 
   const positionSeriesData = useMemo(() => {
-    return chartData.map(point => ({
-      time: toTimestamp(point.date),
-      value: point.shares ?? 0,
-    }));
+    return chartData
+      .filter(point => (point.shares ?? 0) > 0)
+      .map(point => ({
+        time: toTimestamp(point.date),
+        value: point.shares ?? 0,
+      }));
   }, [chartData]);
 
   useEffect(() => {
@@ -878,6 +928,16 @@ export function StockDetailPage() {
     const container = chartContainerRef.current;
     if (!container) return;
 
+    // Clean up existing chart if it exists
+    if (chartInstanceRef.current) {
+      chartInstanceRef.current.remove();
+      chartInstanceRef.current = null;
+      priceSeriesRef.current = null;
+      navSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      positionSeriesRef.current = null;
+    }
+
     const chart = createChart(container, {
       layout: {
         background: { type: ColorType.Solid, color: '#ffffff' },
@@ -892,13 +952,16 @@ export function StockDetailPage() {
       },
       timeScale: {
         borderColor: '#e2e8f0',
+        fixLeftEdge: true,
+        fixRightEdge: true,
       },
       crosshair: {
         mode: 0,
       },
     });
 
-    const areaSeries = (chart as any).addAreaSeries({
+    // v5 API - use addSeries with series type
+    const areaSeries = chart.addSeries(AreaSeries, {
       lineColor: '#667eea',
       lineWidth: 2,
       topColor: 'rgba(102, 126, 234, 0.4)',
@@ -906,7 +969,7 @@ export function StockDetailPage() {
       priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
     });
 
-    const navSeries = (chart as any).addLineSeries({
+    const navSeries = chart.addSeries(LineSeries, {
       color: '#10b981',
       lineWidth: 2,
       priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
@@ -914,7 +977,7 @@ export function StockDetailPage() {
       visible: showNavSeries,
     });
 
-    const volumeSeries = (chart as any).addHistogramSeries({
+    const volumeSeries = chart.addSeries(HistogramSeries, {
       color: '#a5b4fc',
       priceFormat: { type: 'volume' },
       priceScaleId: '',
@@ -924,7 +987,7 @@ export function StockDetailPage() {
       visible: true,
     });
 
-    const positionSeries = (chart as any).addLineSeries({
+    const positionSeries = chart.addSeries(LineSeries, {
       color: '#0ea5e9',
       lineWidth: 2,
       priceScaleId: 'shares',
@@ -1034,9 +1097,9 @@ export function StockDetailPage() {
   useEffect(() => {
     if (!priceSeriesRef.current) return;
     if (typeof (priceSeriesRef.current as any).setMarkers === 'function') {
-      (priceSeriesRef.current as any).setMarkers(showEventMarkers ? chartMarkers : []);
+      (priceSeriesRef.current as any).setMarkers(chartMarkers);
     }
-  }, [chartMarkers, showEventMarkers]);
+  }, [chartMarkers]);
 
   useEffect(() => {
     if (!chartInstanceRef.current || chartData.length === 0) return;
@@ -1096,10 +1159,9 @@ export function StockDetailPage() {
       const navData = param.seriesData?.get(navSeriesRef.current!) as { value: number; time: UTCTimestamp } | undefined;
       const positionData = param.seriesData?.get(positionSeriesRef.current!) as { value: number; time: UTCTimestamp } | undefined;
 
-      // Only show tooltip if there is something relevant to show
-      // If NAV is hidden, treat navData as absent for tooltip purposes
-      const effectiveNavData = showNavSeries ? navData : undefined;
-      const effectivePositionData = showPositionSeries ? positionData : undefined;
+      // Always show all data in tooltip, even if series are hidden
+      const effectiveNavData = navData;
+      const effectivePositionData = positionData;
 
       if (!event && !priceData && !effectiveNavData && !effectivePositionData) {
         setMarkerTooltipState(prev =>
@@ -1185,12 +1247,17 @@ export function StockDetailPage() {
       </BackButton>
 
       <Header>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <StockTitle>{yahooMeta?.longName || stockData.symbol}</StockTitle>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <StockSubtitle>{stockData.symbol}</StockSubtitle>
-            <span style={{ color: '#94a3b8' }}>•</span>
-            <StockSubtitle>{stockData.currency} • {stockData.position.shares} shares</StockSubtitle>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <StockTitle>{yahooMeta?.longName || stockData.symbol}</StockTitle>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <StockSubtitle>{stockData.symbol}</StockSubtitle>
+              <span style={{ color: '#94a3b8' }}>•</span>
+              <StockSubtitle>{stockData.currency} • {stockData.position.shares} shares</StockSubtitle>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+            <PageHeaderControls />
           </div>
         </div>
       </Header>
@@ -1199,16 +1266,16 @@ export function StockDetailPage() {
         <BigMetricBox>
           <BigMetricLabel>Current Value</BigMetricLabel>
           <BigMetricValue>
-            {currencySymbol}{stockData.position.currentValue?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || 'N/A'}
+            {privacyMode ? '***' : `${currencySymbol}${stockData.position.currentValue?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || 'N/A'}`}
           </BigMetricValue>
         </BigMetricBox>
 
         <BigMetricBox $align="right">
           <BigMetricLabel>Total Return</BigMetricLabel>
           <BigMetricValue $color={isPositive ? '#10b981' : '#ef4444'}>
-            +{currencySymbol}{metrics.totalReturn.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            {privacyMode ? '***' : `+${currencySymbol}${metrics.totalReturn.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
             <BigMetricSubValue $positive={isPositive}>
-              ({isPositive ? '+' : ''}{metrics.totalReturnPercent.toFixed(2)}%)
+              {privacyMode ? '' : `(${isPositive ? '+' : ''}${metrics.totalReturnPercent.toFixed(2)}%)`}
             </BigMetricSubValue>
           </BigMetricValue>
         </BigMetricBox>
@@ -1216,245 +1283,14 @@ export function StockDetailPage() {
 
       <MetricsContainer>
         {/* Column 1: Portfolio Overview */}
-        <MetricsTable>
-          <thead>
-            <tr>
-              <th colSpan={2} style={{ width: '100%', display: 'block' }}>
-                <CardHeader>Portfolio Overview</CardHeader>
-              </th>
-            </tr>
-          </thead>
-          <tbody style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Current Price
-                  <HelpIconWrapper title="Current market price per share">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue>{currencySymbol}{stockData.position.currentPrice?.toFixed(2) || 'N/A'}</MetricValue>
-            </MetricRow>
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Shares
-                  <HelpIconWrapper title="Total number of shares held">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue>{stockData.position.shares}</MetricValue>
-            </MetricRow>
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Average Cost
-                  <HelpIconWrapper title="Average cost per share">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue>{currencySymbol}{stockData.position.averageCost.toFixed(2)}</MetricValue>
-            </MetricRow>
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Holding Period
-                  <HelpIconWrapper title="Number of days since first purchase">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue>{metrics.holdingPeriodDays} days</MetricValue>
-            </MetricRow>
-            <MetricRow style={{ flex: 1, borderBottom: 'none', minHeight: '1px' }} />
-          </tbody>
-        </MetricsTable>
+        <MetricCard title="Portfolio Overview" metrics={portfolioOverviewMetrics} />
 
         {/* Column 2: Performance Metrics */}
-        <MetricsTable>
-          <thead>
-            <tr>
-              <th colSpan={2} style={{ width: '100%', display: 'block' }}>
-                <CardHeader>Performance Metrics</CardHeader>
-              </th>
-            </tr>
-          </thead>
-          <tbody style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Annualized Return
-                  <HelpIconWrapper title="Compound Annual Growth Rate of the investment based on holding period">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue $color={metrics.annualizedReturn >= 0 ? '#10b981' : '#ef4444'}>
-                {metrics.annualizedReturn.toFixed(2)}%
-              </MetricValue>
-            </MetricRow>
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Max Drawdown (5Y)
-                  <HelpIconWrapper title="Maximum observed loss from a peak to a trough within the last 5 years">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue $color="#ef4444">
-                {metrics.maxDrawdownPercent.toFixed(2)}%
-                <span style={{ fontSize: '0.85rem', opacity: 0.7, marginLeft: '6px', fontWeight: 500 }}>
-                  ({currencySymbol}{metrics.maxDrawdown.toFixed(2)})
-                </span>
-              </MetricValue>
-            </MetricRow>
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Volatility (5Y)
-                  <HelpIconWrapper title="Annualized standard deviation of daily returns over the last 5 years">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue>{metrics.priceVolatility.toFixed(2)}%</MetricValue>
-            </MetricRow>
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Best Day Gain (5Y)
-                  <HelpIconWrapper title="Largest single-day gain within the last 5 years">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue $color="#10b981">
-                +{currencySymbol}{metrics.bestDayGain.toFixed(2)}
-                {metrics.bestDayGainDate && (
-                  <span style={{ fontSize: '0.85rem', opacity: 0.7, marginLeft: '6px', color: '#64748b', fontWeight: 500 }}>
-                    ({metrics.bestDayGainDate})
-                  </span>
-                )}
-              </MetricValue>
-            </MetricRow>
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Worst Day Loss (5Y)
-                  <HelpIconWrapper title="Largest single-day loss within the last 5 years">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue $color="#ef4444">
-                {currencySymbol}{metrics.worstDayLoss.toFixed(2)}
-                {metrics.worstDayLossDate && (
-                  <span style={{ fontSize: '0.85rem', opacity: 0.7, marginLeft: '6px', color: '#64748b', fontWeight: 500 }}>
-                    ({metrics.worstDayLossDate})
-                  </span>
-                )}
-              </MetricValue>
-            </MetricRow>
-          </tbody>
-        </MetricsTable>
+        <MetricCard title="Performance Metrics" metrics={performanceMetrics} />
 
         {/* Column 3: Market Data */}
-        <MetricsTable>
-          <thead>
-            <tr>
-              <th colSpan={2} style={{ width: '100%', display: 'block' }}>
-                <CardHeader>Market Data</CardHeader>
-              </th>
-            </tr>
-          </thead>
-          <tbody style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-            {yahooMeta && (
-              <>
-                <MetricRow>
-                  <MetricLabel>
-                    <MetricLabelContainer>
-                      Market Price
-                      <HelpIconWrapper title="Regular market price from Yahoo Finance">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                      </HelpIconWrapper>
-                    </MetricLabelContainer>
-                  </MetricLabel>
-                  <MetricValue>{currencySymbol}{yahooMeta.regularMarketPrice?.toFixed(2) || 'N/A'}</MetricValue>
-                </MetricRow>
-                <MetricRow>
-                  <MetricLabel>
-                    <MetricLabelContainer>
-                      Day Range
-                      <HelpIconWrapper title="Lowest and Highest price of the current trading day">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                      </HelpIconWrapper>
-                    </MetricLabelContainer>
-                  </MetricLabel>
-                  <MetricValue>
-                    {currencySymbol}{yahooMeta.regularMarketDayLow?.toFixed(2)} - {currencySymbol}{yahooMeta.regularMarketDayHigh?.toFixed(2)}
-                  </MetricValue>
-                </MetricRow>
-                <MetricRow>
-                  <MetricLabel>
-                    <MetricLabelContainer>
-                      52 Week Range
-                      <HelpIconWrapper title="Lowest and Highest price over the last 52 weeks">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                      </HelpIconWrapper>
-                    </MetricLabelContainer>
-                  </MetricLabel>
-                  <MetricValue>
-                    {currencySymbol}{yahooMeta.fiftyTwoWeekLow?.toFixed(2)} - {currencySymbol}{yahooMeta.fiftyTwoWeekHigh?.toFixed(2)}
-                  </MetricValue>
-                </MetricRow>
-              </>
-            )}
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Highest Price
-                  <HelpIconWrapper title="Highest historical price observed in your data">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue>{currencySymbol}{metrics.highestPrice.toFixed(2)}</MetricValue>
-            </MetricRow>
-            <MetricRow>
-              <MetricLabel>
-                <MetricLabelContainer>
-                  Lowest Price
-                  <HelpIconWrapper title="Lowest historical price observed in your data">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </MetricLabelContainer>
-              </MetricLabel>
-              <MetricValue>{currencySymbol}{metrics.lowestPrice.toFixed(2)}</MetricValue>
-            </MetricRow>
-            {yahooMeta && (
-              <MetricRow>
-                <MetricLabel>
-                  <MetricLabelContainer>
-                    Volume
-                    <HelpIconWrapper title="Volume of shares traded">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                    </HelpIconWrapper>
-                  </MetricLabelContainer>
-                </MetricLabel>
-                <MetricValue>{yahooMeta.regularMarketVolume?.toLocaleString()}</MetricValue>
-              </MetricRow>
-            )}
-            {/* Filler row to push content up if needed, or let flex handle it */}
-            <MetricRow style={{ flex: 1, borderBottom: 'none', minHeight: '1px' }} />
-          </tbody>
-        </MetricsTable>
+        <MetricCard title="Market Data" metrics={marketDataMetrics} />
       </MetricsContainer>
-
-
 
       <ChartSection>
         <ChartHeader>
@@ -1476,7 +1312,7 @@ export function StockDetailPage() {
           </div>
           <ChartControls>
             <TimeRangeSelector className="group">
-              {(['1W', 'MTD', '1M', '3M', '6M', 'YTD', '1Y', 'ALL'] as const).map(range => (
+              {(['1W', 'MTD', '1M', '3M', '6M', 'YTD', '1Y', '5Y', 'ALL'] as const).map(range => (
                 <TimeRangeButton
                   key={range}
                   $active={chartTimeRange === range}
@@ -1554,52 +1390,7 @@ export function StockDetailPage() {
         </SectionTitle>
         {dividendSummary && dividendSummary.dividendCount > 0 ? (
           <>
-            {/* 1. Dividend Metrics (3 Cols) */}
-            <DividendMetricGrid>
-              <DividendMetricCard>
-                <DividendMetricTitle>
-                  Total Dividends
-                  <HelpIconWrapper title="Sum of all dividend payouts received. Formula: Σ (Dividend Per Share × Shares Owned)">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </DividendMetricTitle>
-                <DividendMetricValue>
-                  {currencySymbol}{dividendSummary.totalDividends.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </DividendMetricValue>
-                <DividendMetricSub>
-                  {dividendSummary.dividendCount} payouts
-                </DividendMetricSub>
-              </DividendMetricCard>
-
-              <DividendMetricCard>
-                <DividendMetricTitle>
-                  Annual Yield
-                  <HelpIconWrapper title="Current annual dividend yield based on trailing 12-month payouts relative to current market price. Formula: (TTM Dividends / Current Price) × 100">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </DividendMetricTitle>
-                <DividendMetricValue>
-                  {dividendSummary.annualYield ? `${dividendSummary.annualYield.toFixed(2)}%` : '—'}
-                </DividendMetricValue>
-                <DividendMetricSub>
-                  Last: {dividendSummary.lastDividendDate || 'N/A'}
-                </DividendMetricSub>
-              </DividendMetricCard>
-
-              <DividendMetricCard>
-                <DividendMetricTitle>
-                  Average Payout
-                  <HelpIconWrapper title="Average amount received per dividend distribution. Formula: Total Dividends / Count of Distributions">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                  </HelpIconWrapper>
-                </DividendMetricTitle>
-                <DividendMetricValue>
-                  {currencySymbol}{dividendSummary.averageDividend.toFixed(2)}
-                </DividendMetricValue>
-              </DividendMetricCard>
-            </DividendMetricGrid>
-
-            {/* 2. Visuals: Chart + History Table */}
+            {/* Visuals: Chart + History Table + Metrics */}
             <DividendVisualsContainer>
               {/* Chart Panel */}
               <DividendPanel>
@@ -1634,28 +1425,24 @@ export function StockDetailPage() {
                 <DividendPanelHeader>
                   <span>Summary Table</span>
                 </DividendPanelHeader>
-                <DividendScrollArea style={{ flex: 1 }}>
-                  <DividendScrollInner>
-                    <DividendTable>
-                      <thead>
-                        <DividendRow>
-                          <th style={{ textAlign: 'left', padding: '12px 16px', fontSize: '0.85rem', color: '#64748b' }}>Period</th>
-                          <th style={{ textAlign: 'center', padding: '12px 16px', fontSize: '0.85rem', color: '#64748b' }}>Count</th>
-                          <th style={{ textAlign: 'right', padding: '12px 16px', fontSize: '0.85rem', color: '#64748b' }}>Amount</th>
-                        </DividendRow>
-                      </thead>
-                      <tbody>
-                        {(dividendPeriodMode === 'year' ? dividendSummary.perYearTotals : dividendSummary.perQuarterTotals).map((item) => (
-                          <DividendRow key={item.period}>
-                            <DividendCell>{item.period}</DividendCell>
-                            <DividendCell style={{ textAlign: 'center' }}>{item.count}</DividendCell>
-                            <DividendCell style={{ textAlign: 'right' }}>{currencySymbol}{item.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</DividendCell>
-                          </DividendRow>
-                        ))}
-                      </tbody>
-                    </DividendTable>
-                  </DividendScrollInner>
-                </DividendScrollArea>
+                <div style={{ padding: '1rem' }}>
+                  <TanStackTable
+                    data={dividendPeriodMode === 'year' ? dividendSummary.perYearTotals : dividendSummary.perQuarterTotals}
+                    columns={dividendTableColumns}
+                    initialSorting={[{ id: 'period', desc: true }]}
+                    emptyMessage="No dividend data available"
+                  />
+                </div>
+              </DividendPanel>
+
+              {/* Metrics Panel */}
+              <DividendPanel>
+                <DividendPanelHeader>
+                  <span>Dividend Metrics</span>
+                </DividendPanelHeader>
+                <div style={{ padding: '1rem' }}>
+                  <MetricCard title="" metrics={dividendMetrics} />
+                </div>
               </DividendPanel>
             </DividendVisualsContainer>
           </>
@@ -1667,13 +1454,13 @@ export function StockDetailPage() {
       <Section>
         <SectionTitle>
           <Activity size={20} />
-          Transaction History
+          Trade History
         </SectionTitle>
-        <AdvancedTable
+        <TanStackTable
           data={transactionEvents}
           columns={transactionColumns}
-          defaultSortKey="date"
-          defaultSortDirection="desc"
+          initialSorting={[{ id: 'date', desc: true }]}
+          emptyMessage="No trades found"
         />
       </Section>
     </Container>

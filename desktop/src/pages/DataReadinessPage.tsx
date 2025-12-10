@@ -11,7 +11,7 @@ import {
   YAxis,
   Legend,
 } from 'recharts';
-import { Container, Header, Meta, Title, Description, Card } from '../components/PageLayout';
+import { Container, Header, HeaderLeft, HeaderRight, Meta, Title, Description, Card, PageHeaderControls } from '../components/PageLayout';
 import { historicalDataService } from '../services/historicalDataService';
 import { bulkDownloadManager, BulkDownloadState } from '../services/bulkDownloadManager';
 import { StockDataCoverage, SplitHistory } from '../types/HistoricalData';
@@ -597,11 +597,16 @@ export function DataReadinessPage() {
   return (
     <Container>
       <Header>
-        <Meta>Historical Stock Data</Meta>
-        <Title>Historical Stock Data</Title>
-        <Description>
-          Download and monitor 15 years of stock prices & splits across all tracked tickers.
-        </Description>
+        <HeaderLeft>
+          <Meta>Data Management</Meta>
+          <Title>Historical Stock Data</Title>
+          <Description>
+            Download and monitor 15 years of stock prices & splits across all tracked tickers.
+          </Description>
+        </HeaderLeft>
+        <HeaderRight>
+          <PageHeaderControls />
+        </HeaderRight>
       </Header>
 
       <Card>

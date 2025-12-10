@@ -1,14 +1,16 @@
 import { StockDetailData, SplitRecord } from '../types/StockDetail';
 import { priceDataService } from './priceDataService';
 import { navDataService } from './navDataService';
+import { splitDataService } from './splitDataService';
 
 export class StockDetailService {
   async loadStockData(symbol: string): Promise<StockDetailData> {
     try {
-      const priceHistory = await priceDataService.getPricesForSymbol(symbol);
-      const navHistory = await navDataService.getNavForSymbol(symbol);
-
-      const splits: SplitRecord[] = [];
+      const [priceHistory, navHistory, splits] = await Promise.all([
+        priceDataService.getPricesForSymbol(symbol),
+        navDataService.getNavForSymbol(symbol),
+        splitDataService.getSplitsForSymbol(symbol),
+      ]);
 
       return {
         symbol,

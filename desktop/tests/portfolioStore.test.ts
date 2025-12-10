@@ -3,16 +3,18 @@ import { usePortfolioStore } from '../src/store/portfolioStore';
 import { useTransactionsStore } from '../src/store/transactionsStore';
 import { priceService } from '../src/services/priceService';
 import { fxRateDataService } from '../src/services/fxRateDataService';
+import { priceDataService } from '../src/services/priceDataService';
 
 vi.mock('../src/services/priceService');
 vi.mock('../src/services/fxRateDataService');
+vi.mock('../src/services/priceDataService');
 
 describe('portfolioStore', () => {
   beforeEach(() => {
     usePortfolioStore.setState({
       positions: [],
       summary: null,
-      loadingPrices: false,
+      loading: false,
       lastUpdated: null,
       fxRates: new Map([['USD', 1]]),
     });
@@ -23,6 +25,9 @@ describe('portfolioStore', () => {
       error: null,
     });
 
+    // Mock getDailyPrices to return empty map by default
+    vi.mocked(priceDataService.getDailyPrices).mockResolvedValue(new Map());
+
     vi.clearAllMocks();
   });
 
@@ -30,7 +35,7 @@ describe('portfolioStore', () => {
     const state = usePortfolioStore.getState();
     expect(state.positions).toEqual([]);
     expect(state.summary).toBe(null);
-    expect(state.loadingPrices).toBe(false);
+    expect(state.loading).toBe(false);
     expect(state.lastUpdated).toBe(null);
     expect(state.fxRates.get('USD')).toBe(1);
   });
@@ -97,15 +102,15 @@ describe('portfolioStore', () => {
     const priceMap = new Map([['NASDAQ:AAPL', 180]]);
     vi.mocked(priceService.getCachedPrices).mockResolvedValue(priceMap);
 
-    const { loadCachedPrices } = usePortfolioStore.getState();
-    await loadCachedPrices();
+    const { loadPortfolio } = usePortfolioStore.getState();
+    await loadPortfolio();
 
     const state = usePortfolioStore.getState();
     expect(state.positions[0].currentPrice).toBe(180);
     expect(state.lastUpdated).not.toBe(null);
   });
 
-  it('refreshes prices with loading state', async () => {
+  it('loads portfolio with loading state', async () => {
     useTransactionsStore.setState({
       transactions: [
         {
@@ -127,24 +132,24 @@ describe('portfolioStore', () => {
     calculatePortfolio();
 
     const priceMap = new Map([['NASDAQ:AAPL', 180]]);
-    vi.mocked(priceService.getBatchPrices).mockImplementation(
+    vi.mocked(priceService.getCachedPrices).mockImplementation(
       () => new Promise(resolve => setTimeout(() => resolve(priceMap), 100))
     );
 
-    const { refreshPrices } = usePortfolioStore.getState();
-    const promise = refreshPrices();
+    const { loadPortfolio } = usePortfolioStore.getState();
+    const promise = loadPortfolio();
 
     const loadingState = usePortfolioStore.getState();
-    expect(loadingState.loadingPrices).toBe(true);
+    expect(loadingState.loading).toBe(true);
 
     await promise;
 
     const finalState = usePortfolioStore.getState();
-    expect(finalState.loadingPrices).toBe(false);
+    expect(finalState.loading).toBe(false);
     expect(finalState.positions[0].currentPrice).toBe(180);
   });
 
-  it('handles price refresh errors', async () => {
+  it('handles portfolio loading errors', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     useTransactionsStore.setState({
@@ -167,62 +172,70 @@ describe('portfolioStore', () => {
     const { calculatePortfolio } = usePortfolioStore.getState();
     calculatePortfolio();
 
-    vi.mocked(priceService.getBatchPrices).mockRejectedValue(
+    vi.mocked(priceService.getCachedPrices).mockRejectedValue(
       new Error('Failed to fetch prices')
     );
 
-    const { refreshPrices } = usePortfolioStore.getState();
-    await refreshPrices();
+    const { loadPortfolio } = usePortfolioStore.getState();
+    await loadPortfolio();
 
     const state = usePortfolioStore.getState();
-    expect(state.loadingPrices).toBe(false);
+    expect(state.loading).toBe(false);
     expect(consoleSpy).toHaveBeenCalled();
 
     consoleSpy.mockRestore();
   });
 
   it('loads FX rates from cache', async () => {
-    const cachedRates = [
-      { from_currency: 'TWD', to_currency: 'USD', rate: 0.0312, date: '2024-01-01', source: 'yahoo_finance' as const, updated_at: '2024-01-01T00:00:00Z' },
-    ];
+    const dailyRates = new Map([
+      ['USD/TWD', {
+        latest: { from_currency: 'USD', to_currency: 'TWD', rate: 32.05, date: '2024-01-01', source: 'yahoo_finance' as const, updated_at: '2024-01-01T00:00:00Z' },
+      }],
+    ]);
 
-    vi.mocked(fxRateDataService.loadAllRates).mockResolvedValue(cachedRates);
+    vi.mocked(fxRateDataService.getDailyFxRates).mockResolvedValue(dailyRates);
 
     const { loadFxRates } = usePortfolioStore.getState();
     await loadFxRates();
 
     const state = usePortfolioStore.getState();
-    expect(state.fxRates.get('TWD')).toBe(0.0312);
+    // Rate is stored inverted: 1/32.05 = 0.0312
+    expect(state.fxRates.get('TWD')).toBeCloseTo(1 / 32.05, 4);
     expect(state.fxRates.get('USD')).toBe(1);
   });
 
   it('loads multiple FX rates from cache', async () => {
-    const cachedRates = [
-      { from_currency: 'JPY', to_currency: 'USD', rate: 0.0067, date: '2024-01-01', source: 'yahoo_finance' as const, updated_at: '2024-01-01T00:00:00Z' },
-      { from_currency: 'HKD', to_currency: 'USD', rate: 0.1282, date: '2024-01-01', source: 'yahoo_finance' as const, updated_at: '2024-01-01T00:00:00Z' },
-    ];
+    const dailyRates = new Map([
+      ['USD/JPY', {
+        latest: { from_currency: 'USD', to_currency: 'JPY', rate: 149.25, date: '2024-01-01', source: 'yahoo_finance' as const, updated_at: '2024-01-01T00:00:00Z' },
+      }],
+      ['USD/HKD', {
+        latest: { from_currency: 'USD', to_currency: 'HKD', rate: 7.8, date: '2024-01-01', source: 'yahoo_finance' as const, updated_at: '2024-01-01T00:00:00Z' },
+      }],
+    ]);
 
-    vi.mocked(fxRateDataService.loadAllRates).mockResolvedValue(cachedRates);
+    vi.mocked(fxRateDataService.getDailyFxRates).mockResolvedValue(dailyRates);
 
     const { loadFxRates } = usePortfolioStore.getState();
     await loadFxRates();
 
     const state = usePortfolioStore.getState();
-    expect(state.fxRates.get('JPY')).toBe(0.0067);
-    expect(state.fxRates.get('HKD')).toBe(0.1282);
+    // Rates are stored inverted
+    expect(state.fxRates.get('JPY')).toBeCloseTo(1 / 149.25, 4);
+    expect(state.fxRates.get('HKD')).toBeCloseTo(1 / 7.8, 4);
   });
 
   it('handles FX rate loading errors gracefully', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    vi.mocked(fxRateDataService.loadAllRates).mockRejectedValue(
+    vi.mocked(fxRateDataService.getDailyFxRates).mockRejectedValue(
       new Error('Failed to load FX rates')
     );
 
     const { loadFxRates } = usePortfolioStore.getState();
     await loadFxRates();
 
-    expect(consoleSpy).toHaveBeenCalledWith('Failed to load FX rates:', expect.any(Error));
+    expect(consoleSpy).toHaveBeenCalledWith('loadFxRates: Failed to load FX rates:', expect.any(Error));
 
     consoleSpy.mockRestore();
   });

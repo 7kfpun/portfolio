@@ -61,7 +61,8 @@ export function calculatePositions(transactions: Transaction[]): Position[] {
 
 export function calculatePortfolioSummary(
   positions: Position[],
-  fxRates?: Map<string, number>
+  fxRates?: Map<string, number>,
+  baseCurrency: string = 'USD'
 ): PortfolioSummary {
   let totalValueUSD = 0;
   let totalCostUSD = 0;
@@ -74,7 +75,22 @@ export function calculatePortfolioSummary(
     return rate ? amount * rate : 0;
   };
 
-  for (const position of positions) {
+  const convertToBase = (amount: number, currency: string): number => {
+    if (currency === baseCurrency) return amount;
+    const usdAmount = convertToUSD(amount, currency);
+    if (baseCurrency === 'USD') return usdAmount;
+    if (!fxRates) return usdAmount;
+    const baseRate = fxRates.get(baseCurrency);
+    return baseRate ? usdAmount / baseRate : usdAmount;
+  };
+
+  // Update positions with baseValue
+  const updatedPositions = positions.map(position => ({
+    ...position,
+    baseValue: convertToBase(position.currentValue || position.totalCost, position.currency)
+  }));
+
+  for (const position of updatedPositions) {
     // Skip inactive positions (0 shares) for currency breakdown
     if (position.shares <= 0) {
       continue;
@@ -106,7 +122,7 @@ export function calculatePortfolioSummary(
   const totalGainLossPercent = totalCostUSD > 0 ? (totalGainLoss / totalCostUSD) * 100 : 0;
 
   return {
-    positions,
+    positions: updatedPositions,
     totalValue: totalValueUSD,
     totalCost: totalCostUSD,
     totalGainLoss,

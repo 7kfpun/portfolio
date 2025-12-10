@@ -9,6 +9,7 @@ export interface Position {
   gainLoss?: number;
   gainLossPercent?: number;
   lastUpdated?: string;
+  baseValue?: number;
 }
 
 export interface PortfolioSummary {
@@ -17,11 +18,14 @@ export interface PortfolioSummary {
   totalCost: number;
   totalGainLoss: number;
   totalGainLossPercent: number;
+  dailyGainLoss?: number;
+  dailyGainLossByCurrency?: { [currency: string]: { amountNative: number; amountBase: number } };
   byCurrency: {
     [currency: string]: {
       value: number;
       cost: number;
       gainLoss: number;
+      dailyGainLoss?: number;
       positions: number;
     };
   };

@@ -49,6 +49,24 @@ struct PriceRecordEntry {
     source: String,
 }
 
+#[derive(Serialize)]
+struct DailyPriceData {
+    symbol: String,
+    latest_close: f64,
+    latest_date: String,
+    previous_close: Option<f64>,
+    previous_date: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DailyFxRateData {
+    pair: String,
+    latest_rate: f64,
+    latest_date: String,
+    previous_rate: Option<f64>,
+    previous_date: Option<String>,
+}
+
 fn build_price_csv_content(entries: &[PriceRecordEntry]) -> String {
     if entries.is_empty() {
         return format!("{}\n", PRICE_FILE_HEADER);
@@ -2047,6 +2065,146 @@ fn save_position_snapshot(
 }
 
 #[tauri::command]
+fn get_all_daily_prices(app_handle: tauri::AppHandle) -> Result<Vec<DailyPriceData>, String> {
+    let prices_dir = get_prices_dir(&app_handle)?;
+    let mut daily_prices = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&prices_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("csv") {
+                continue;
+            }
+
+            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                let symbol = filename.trim_end_matches(".csv").replace('_', ":");
+                
+                // Read only first 3 lines (header + latest 2 prices)
+                // Price files are sorted by date descending, so top 2 data rows are what we need
+                if let Ok(content) = read_file_head(&path, 3) {
+                    let lines: Vec<&str> = content.lines().collect();
+                    if lines.len() < 2 {
+                        continue; // Skip if no data (only header)
+                    }
+
+                    let latest_line = lines.get(1);
+                    let previous_line = lines.get(2);
+
+                    if let Some(latest_str) = latest_line {
+                        let fields: Vec<&str> = latest_str.split(',').collect();
+                        if fields.len() < 2 {
+                            continue;
+                        }
+
+                        if let (Ok(latest_date), Ok(latest_close)) = (
+                            NaiveDate::parse_from_str(fields[0].trim(), "%Y-%m-%d"),
+                            fields[1].trim().parse::<f64>(),
+                        ) {
+                            let mut previous_close: Option<f64> = None;
+                            let mut previous_date: Option<String> = None;
+
+                            if let Some(prev_str) = previous_line {
+                                let prev_fields: Vec<&str> = prev_str.split(',').collect();
+                                if prev_fields.len() >= 2 {
+                                    if let (Ok(prev_date), Ok(prev_close_val)) = (
+                                        NaiveDate::parse_from_str(prev_fields[0].trim(), "%Y-%m-%d"),
+                                        prev_fields[1].trim().parse::<f64>(),
+                                    ) {
+                                        previous_date = Some(prev_date.format("%Y-%m-%d").to_string());
+                                        previous_close = Some(prev_close_val);
+                                    }
+                                }
+                            }
+
+                            daily_prices.push(DailyPriceData {
+                                symbol,
+                                latest_close,
+                                latest_date: latest_date.format("%Y-%m-%d").to_string(),
+                                previous_close,
+                                previous_date,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(daily_prices)
+}
+
+#[tauri::command]
+fn get_all_daily_fx_rates(app_handle: tauri::AppHandle) -> Result<Vec<DailyFxRateData>, String> {
+    let fx_rates_dir = get_fx_rates_dir(&app_handle)?;
+    let mut daily_rates = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&fx_rates_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("csv") {
+                continue;
+            }
+
+            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                let pair = filename.trim_end_matches(".csv").replace('_', "/");
+                
+                // Read only first 3 lines (header + latest 2 rates)
+                // FX rate files are sorted by date descending
+                if let Ok(content) = read_file_head(&path, 3) {
+                    let lines: Vec<&str> = content.lines().collect();
+                    if lines.len() < 2 {
+                        continue; // Skip if no data (only header)
+                    }
+
+                    let latest_line = lines.get(1);
+                    let previous_line = lines.get(2);
+
+                    if let Some(latest_str) = latest_line {
+                        let fields: Vec<&str> = latest_str.split(',').collect();
+                        // FX CSV format: from_currency,to_currency,date,rate,source,updated_at
+                        if fields.len() < 4 {
+                            continue;
+                        }
+
+                        // Parse date (column 2) and rate (column 3)
+                        if let (Ok(latest_date), Ok(latest_rate)) = (
+                            NaiveDate::parse_from_str(fields[2].trim(), "%Y-%m-%d"),
+                            fields[3].trim().parse::<f64>(),
+                        ) {
+                            let mut previous_rate: Option<f64> = None;
+                            let mut previous_date: Option<String> = None;
+
+                            if let Some(prev_str) = previous_line {
+                                let prev_fields: Vec<&str> = prev_str.split(',').collect();
+                                if prev_fields.len() >= 4 {
+                                    if let (Ok(prev_date), Ok(prev_rate_val)) = (
+                                        NaiveDate::parse_from_str(prev_fields[2].trim(), "%Y-%m-%d"),
+                                        prev_fields[3].trim().parse::<f64>(),
+                                    ) {
+                                        previous_date = Some(prev_date.format("%Y-%m-%d").to_string());
+                                        previous_rate = Some(prev_rate_val);
+                                    }
+                                }
+                            }
+
+                            daily_rates.push(DailyFxRateData {
+                                pair,
+                                latest_rate,
+                                latest_date: latest_date.format("%Y-%m-%d").to_string(),
+                                previous_rate,
+                                previous_date,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(daily_rates)
+}
+
+#[tauri::command]
 fn read_nav_file(app_handle: tauri::AppHandle, symbol: String) -> Result<String, String> {
     let navs_dir = get_navs_dir(&app_handle)?;
     let safe_symbol = symbol.replace(':', "_");
@@ -2099,6 +2257,7 @@ fn main() {
             read_price_file,
             read_price_file_head,
             list_price_files,
+            get_all_daily_prices,
             write_split_file,
             read_split_file,
             list_split_files,
@@ -2109,6 +2268,7 @@ fn main() {
             read_fx_rate_file,
             read_fx_rate_file_head,
             list_fx_rate_files,
+            get_all_daily_fx_rates,
             sync_history_once,
             download_symbol_history,
             start_history_worker,

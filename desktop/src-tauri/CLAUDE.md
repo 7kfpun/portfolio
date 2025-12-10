@@ -246,9 +246,9 @@ await invoke('append_data_csv', {
 ### App Data Directory
 
 **Location by Platform**:
-- macOS: `~/Library/Application Support/com.portfolio.manager/`
-- Windows: `C:\Users\{username}\AppData\Roaming\com.portfolio.manager\`
-- Linux: `~/.config/com.portfolio.manager/`
+- macOS: `~/Library/Application Support/com.kfpun.portfolio/`
+- Windows: `C:\Users\{username}\AppData\Roaming\com.kfpun.portfolio\`
+- Linux: `~/.config/com.kfpun.portfolio/`
 
 **Directory Structure**:
 ```
@@ -273,7 +273,7 @@ fn get_data_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     let mut path = data_dir()
         .ok_or("Failed to get data directory")?;
 
-    path.push("com.portfolio.manager");
+    path.push("com.kfpun.portfolio");
     path.push("data");
 
     if !path.exists() {

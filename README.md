@@ -9,18 +9,16 @@ A cross-platform desktop application for tracking and managing multi-market inve
 
 ## Features
 
-### 1. Portfolio Dashboard
+### 1. Dashboard
 - Real-time holdings view with current valuations
 - Daily gain/loss tracking and filtering
 - Currency conversion to base currency
 - Interactive charts (currency allocation donut, top holdings bar)
 - Advanced sorting and filtering
 
-### 2. Portfolio Heatmap
-- TradingView-style visualization with color-coded performance
-- Cell size represents portfolio weight
-- Dual view modes (heatmap and table)
-- Daily performance tracking per position
+### 2. Report
+- **Positions**: Detailed positions table with filtering and sorting
+- **Heatmaps**: Visual charts for portfolio allocation and top positions
 
 ### 3. Transaction Management
 - Multi-market support (USD, TWD, JPY, HKD)
@@ -42,13 +40,16 @@ A cross-platform desktop application for tracking and managing multi-market inve
 ## Screenshots
 
 ### Dashboard View
+Portfolio overview with statistics and currency breakdown
+
+### Positions Report
+Detailed positions table with filtering and sorting
+
+### Heatmaps Report
+Visual charts for portfolio allocation and top positions
+
+### Transaction Management
 Transaction statistics with breakdowns by type and currency
-
-### Data Table
-Sortable, filterable table with search functionality
-
-### Portfolio Overview
-Interactive charts plus refined tables with filters for holdings
 
 ## Installation
 

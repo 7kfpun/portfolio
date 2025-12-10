@@ -73,9 +73,7 @@ export class PriceDataService {
       console.error(`Failed to read price file for ${symbol}:`, error);
       return [];
     }
-  }
-
-  private buildFileContent(records: PriceRecord[]): string {
+  } private buildFileContent(records: PriceRecord[]): string {
     const lines = [PRICE_FILE_HEADER];
     for (const record of records) {
       lines.push(
@@ -117,9 +115,7 @@ export class PriceDataService {
       console.error('Failed to load prices:', error);
       return [];
     }
-  }
-
-  async getLatestPrice(symbol: string): Promise<PriceRecord | null> {
+  } async getLatestPrice(symbol: string): Promise<PriceRecord | null> {
     const symbolPrices = await this.readSymbolPrices(symbol);
     if (symbolPrices.length === 0) {
       return null;
@@ -145,6 +141,49 @@ export class PriceDataService {
       }
     }
     return priceMap;
+  }
+
+  async getDailyPrices(): Promise<Map<string, { latest: PriceRecord; previous?: PriceRecord }>> {
+    interface DailyPriceData {
+      symbol: string;
+      latest_close: number;
+      latest_date: string;
+      previous_close?: number;
+      previous_date?: string;
+    }
+
+    try {
+      const dailyPrices = await invoke<DailyPriceData[]>('get_all_daily_prices');
+      const result = new Map<string, { latest: PriceRecord; previous?: PriceRecord }>();
+
+      for (const data of dailyPrices) {
+        const latest: PriceRecord = {
+          symbol: data.symbol,
+          date: data.latest_date,
+          close: data.latest_close,
+          source: 'yahoo_finance',
+          updated_at: new Date().toISOString(),
+        };
+
+        let previous: PriceRecord | undefined;
+        if (data.previous_close !== undefined && data.previous_date) {
+          previous = {
+            symbol: data.symbol,
+            date: data.previous_date,
+            close: data.previous_close,
+            source: 'yahoo_finance',
+            updated_at: new Date().toISOString(),
+          };
+        }
+
+        result.set(data.symbol, { latest, previous });
+      }
+
+      return result;
+    } catch (error) {
+      console.error('Failed to get daily prices:', error);
+      return new Map();
+    }
   }
 
   async savePrices(newPrices: PriceRecord[]): Promise<void> {
@@ -191,6 +230,33 @@ export class PriceDataService {
     return records.sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
     );
+  }
+
+  async getDailyFxRates(): Promise<Map<string, { latest: number; previous?: number }>> {
+    interface DailyFxRateData {
+      pair: string;
+      latest_rate: number;
+      latest_date: string;
+      previous_rate?: number;
+      previous_date?: string;
+    }
+
+    try {
+      const dailyRates = await invoke<DailyFxRateData[]>('get_all_daily_fx_rates');
+      const result = new Map<string, { latest: number; previous?: number }>();
+
+      for (const data of dailyRates) {
+        result.set(data.pair, {
+          latest: data.latest_rate,
+          previous: data.previous_rate,
+        });
+      }
+
+      return result;
+    } catch (error) {
+      console.error('Failed to get daily FX rates:', error);
+      return new Map();
+    }
   }
 }
 

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import styled from 'styled-components';
 import { useSettingsStore } from '../store/settingsStore';
+import { CurrencyType } from '../types/Settings';
 import { DollarSign } from 'lucide-react';
 import { Container, Header, Meta, Title, Description, Card } from '../components/PageLayout';
 import { CurrencySelector } from '../components/CurrencySelector';
@@ -77,7 +78,7 @@ export function KeySettingsPage() {
     loadSettings();
   }, [loadSettings]);
 
-  const handleCurrencyChange = async (newCurrency: 'USD' | 'TWD' | 'JPY' | 'HKD') => {
+  const handleCurrencyChange = async (newCurrency: CurrencyType) => {
     try {
       await updateSettings({
         ...settings,

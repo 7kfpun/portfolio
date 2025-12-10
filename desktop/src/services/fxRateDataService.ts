@@ -184,6 +184,57 @@ export class FxRateDataService {
   async appendRate(rate: FxRateRecord): Promise<void> {
     await this.saveRates([rate]);
   }
+
+  async getDailyFxRates(): Promise<Map<string, { latest: FxRateRecord; previous?: FxRateRecord }>> {
+    interface DailyFxRateData {
+      pair: string;
+      latest_rate: number;
+      latest_date: string;
+      previous_rate?: number;
+      previous_date?: string;
+    }
+
+    try {
+      const dailyRates = await invoke<DailyFxRateData[]>('get_all_daily_fx_rates');
+      console.log('getDailyFxRates - Raw data from Rust:', dailyRates);
+
+      const result = new Map<string, { latest: FxRateRecord; previous?: FxRateRecord }>();
+
+      for (const data of dailyRates) {
+        const [from, to] = data.pair.split('/');
+        if (!from || !to) continue;
+
+        const latest: FxRateRecord = {
+          from_currency: from,
+          to_currency: to,
+          date: data.latest_date,
+          rate: data.latest_rate,
+          source: 'yahoo_finance',
+          updated_at: new Date().toISOString(),
+        };
+
+        let previous: FxRateRecord | undefined;
+        if (data.previous_rate !== undefined && data.previous_date) {
+          previous = {
+            from_currency: from,
+            to_currency: to,
+            date: data.previous_date,
+            rate: data.previous_rate,
+            source: 'yahoo_finance',
+            updated_at: new Date().toISOString(),
+          };
+        }
+
+        result.set(data.pair, { latest, previous });
+      }
+
+      console.log('getDailyFxRates - Processed result map:', Object.fromEntries(result));
+      return result;
+    } catch (error) {
+      console.error('Failed to get daily FX rates:', error);
+      return new Map();
+    }
+  }
 }
 
 export const fxRateDataService = new FxRateDataService();

@@ -1,127 +1,49 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import styled from 'styled-components';
-import { AdvancedTable, Column } from '../components/AdvancedTable';
+import { ColumnDef, Row } from '@tanstack/react-table';
+import { Container, Header, HeaderLeft, HeaderRight, Meta, Title, Description, Card, Button, SmallButton, PageHeaderControls } from '../components/PageLayout';
+import { TanStackTable } from '../components/TanStackTable';
 import { useTransactionsStore } from '../store/transactionsStore';
 import { usePortfolioStore } from '../store/portfolioStore';
 import { useSettingsStore } from '../store/settingsStore';
+import { CurrencyType } from '../types/Settings';
 import { buildFullPositionHistory, FullPositionEntry } from '../utils/fullPositionHistory';
 import { buildChartData } from '../utils/stockDetailCalculations';
 import { priceDataService } from '../services/priceDataService';
-import { navService, NavSnapshotEntry } from '../services/navService';
+import { navService } from '../services/navService';
 import { PriceRecord } from '../types/PriceData';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { CURRENCY_SYMBOLS } from '../config/currencies';
 
-const PageContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-`;
-
-const HeaderCard = styled.div`
-  padding: 1.5rem;
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-`;
-
-const HeaderRow = styled.div`
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 1rem;
-`;
-
-const Title = styled.h1`
-  font-size: 1.75rem;
-  margin: 0;
-  color: #111827;
-`;
-
-const Description = styled.p`
-  margin: 0;
-  color: #475569;
-`;
-
-const ActionButton = styled.button<{ $variant?: 'primary' | 'ghost' }>`
-  padding: 0.75rem 1.25rem;
-  border-radius: 8px;
-  border: 1px solid ${props => (props.$variant === 'primary' ? '#4f46e5' : '#e2e8f0')};
-  background: ${props => (props.$variant === 'primary' ? '#4f46e5' : 'white')};
-  color: ${props => (props.$variant === 'primary' ? 'white' : '#111827')};
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 120ms ease;
-  min-width: 200px;
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  &:hover:not(:disabled) {
-    background: ${props => (props.$variant === 'primary' ? '#4338ca' : '#f8fafc')};
-  }
-`;
-
-const SummaryGrid = styled.div`
+const StatsGrid = styled.div`
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 1rem;
 `;
 
-const SummaryCard = styled.div`
-  padding: 1rem;
-  border-radius: 10px;
+const StatCard = styled.div`
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
   border: 1px solid #e2e8f0;
   background: #f8fafc;
 `;
 
-const SummaryLabel = styled.div`
-  font-size: 0.85rem;
+const StatLabel = styled.div`
+  font-size: 0.75rem;
   color: #64748b;
   margin-bottom: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 `;
 
-const SummaryValue = styled.div`
-  font-size: 1.25rem;
+const StatValue = styled.div`
+  font-size: 1.125rem;
   font-weight: 600;
   color: #111827;
 `;
 
-const RowActions = styled.div`
-  display: flex;
-  justify-content: flex-end;
-`;
-
-const RowActionButton = styled.button<{ $loading?: boolean }>`
-  padding: 0.4rem 0.85rem;
-  border-radius: 6px;
-  border: 1px solid #cbd5f5;
-  background: ${props => (props.$loading ? '#e0e7ff' : '#eef2ff')};
-  color: #4338ca;
-  font-weight: 600;
-  font-size: 0.85rem;
-  cursor: ${props => (props.$loading ? 'wait' : 'pointer')};
-  transition: all 120ms ease;
-
-  &:hover:not(:disabled) {
-    background: #e0e7ff;
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-`;
-
 const DetailCard = styled.div`
-  padding: 1.5rem;
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 1rem 0;
 `;
 
 const DetailHeader = styled.div`
@@ -133,16 +55,17 @@ const DetailHeader = styled.div`
   margin-bottom: 1rem;
 `;
 
-const DetailTitle = styled.h2`
+const DetailTitle = styled.h3`
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 1.125rem;
   color: #0f172a;
+  font-weight: 600;
 `;
 
 const DetailSubtitle = styled.p`
-  margin: 0.2rem 0 0;
-  color: #475569;
-  font-size: 0.9rem;
+  margin: 0.25rem 0 0;
+  color: #64748b;
+  font-size: 0.875rem;
 `;
 
 const DetailMeta = styled.div`
@@ -151,14 +74,14 @@ const DetailMeta = styled.div`
   flex-wrap: wrap;
 
   span {
-    color: #475569;
-    font-size: 0.9rem;
+    color: #64748b;
+    font-size: 0.875rem;
   }
 `;
 
 const ChartContainer = styled.div`
   width: 100%;
-  height: 320px;
+  height: 280px;
 `;
 
 const TooltipBox = styled.div`
@@ -173,10 +96,11 @@ const TooltipLabel = styled.div`
   font-weight: 600;
   margin-bottom: 0.25rem;
   color: #111827;
+  font-size: 0.875rem;
 `;
 
 const TooltipValue = styled.div`
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   color: #475569;
 `;
 
@@ -184,33 +108,27 @@ const Message = styled.div<{ $variant: 'success' | 'error' | 'info' }>`
   padding: 0.75rem 1rem;
   border-radius: 8px;
   font-weight: 500;
+  font-size: 0.875rem;
   background: ${props =>
     props.$variant === 'success'
       ? '#ecfdf5'
       : props.$variant === 'error'
-      ? '#fef2f2'
-      : '#eff6ff'};
+        ? '#fef2f2'
+        : '#eff6ff'};
   color: ${props =>
     props.$variant === 'success'
       ? '#047857'
       : props.$variant === 'error'
-      ? '#b91c1c'
-      : '#1d4ed8'};
+        ? '#b91c1c'
+        : '#1d4ed8'};
   border: 1px solid
     ${props =>
-      props.$variant === 'success'
-        ? 'rgba(16, 185, 129, 0.3)'
-        : props.$variant === 'error'
+    props.$variant === 'success'
+      ? 'rgba(16, 185, 129, 0.3)'
+      : props.$variant === 'error'
         ? 'rgba(239, 68, 68, 0.3)'
         : 'rgba(59, 130, 246, 0.3)'};
 `;
-
-const CURRENCY_SYMBOLS: Record<string, string> = {
-  USD: '$',
-  TWD: 'NT$',
-  JPY: '¥',
-  HKD: 'HK$',
-};
 
 interface EnrichedPosition extends FullPositionEntry {
   latestPrice: number;
@@ -228,7 +146,7 @@ interface PositionValuePoint {
 }
 
 const formatCurrency = (value: number, currency: string) => {
-  const symbol = CURRENCY_SYMBOLS[currency] || currency + ' ';
+  const symbol = CURRENCY_SYMBOLS[currency as CurrencyType] || currency + ' ';
   return `${symbol}${value.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -387,15 +305,18 @@ export function NavManagementPage() {
   );
 
   const handleRowClick = useCallback(
-    (row: EnrichedPosition) => {
-      if (selectedRow?.stock === row.stock) {
+    (row: Row<EnrichedPosition>) => {
+      const item = row.original;
+      if (selectedRow?.stock === item.stock) {
         setSelectedRow(null);
         setDetailData(null);
         setDetailError(null);
+        row.toggleExpanded();
         return;
       }
 
-      setSelectedRow(row);
+      setSelectedRow(item);
+      row.toggleExpanded();
     },
     [selectedRow]
   );
@@ -520,7 +441,7 @@ export function NavManagementPage() {
     for (const position of enrichedPositions) {
       // Update status to show current progress
       setStatusMessage(`Processing ${position.stock}...`);
-      
+
       try {
         const payload = {
           timestamp: new Date().toISOString(),
@@ -551,92 +472,124 @@ export function NavManagementPage() {
     }
   }, [enrichedPositions]);
 
-  const columns = useMemo<Column<EnrichedPosition>[]>(() => [
+  const columns = useMemo<ColumnDef<EnrichedPosition>[]>(() => [
     {
-      key: 'stock',
+      accessorKey: 'stock',
       header: 'Ticker',
-      accessor: row => row.stock,
-      width: 140,
+      enableSorting: true,
+      cell: info => <strong>{info.getValue() as string}</strong>,
+      meta: {
+        cellStyle: { fontWeight: 600 },
+      },
     },
     {
-      key: 'status',
+      accessorKey: 'status',
       header: 'Status',
-      accessor: row => (
-        <span style={{ color: row.status === 'Active' ? '#10b981' : '#94a3b8', fontWeight: 600 }}>
-          {row.status}
-        </span>
-      ),
-      width: 120,
+      enableSorting: true,
+      cell: info => {
+        const status = info.getValue() as 'Active' | 'Closed';
+        return (
+          <span style={{ color: status === 'Active' ? '#10b981' : '#94a3b8', fontWeight: 600 }}>
+            {status}
+          </span>
+        );
+      },
     },
     {
-      key: 'shares',
+      accessorKey: 'shares',
       header: 'Shares',
-      accessor: row => row.shares.toLocaleString(undefined, {
+      enableSorting: true,
+      cell: info => (info.getValue() as number).toLocaleString(undefined, {
         minimumFractionDigits: 0,
         maximumFractionDigits: 4,
       }),
-      align: 'right',
-      width: 120,
-    },
-    {
-      key: 'averageCost',
-      header: 'Avg Cost',
-      accessor: row => formatCurrency(row.averageCost, row.currency),
-      align: 'right',
-      width: 140,
-    },
-    {
-      key: 'invested',
-      header: 'Total Invested',
-      accessor: row => formatCurrency(row.invested, row.currency),
-      align: 'right',
-      width: 160,
-    },
-    {
-      key: 'realizedPnl',
-      header: 'Realized P/L',
-      accessor: row => {
-        const formatted = formatCurrency(row.realizedPnl, row.currency);
-        const color = row.realizedPnl >= 0 ? '#16a34a' : '#dc2626';
-        return <span style={{ color }}>{formatted}</span>;
+      meta: {
+        headerStyle: { textAlign: 'right' },
+        cellStyle: { textAlign: 'right' },
       },
-      align: 'right',
-      width: 160,
     },
     {
-      key: 'marketValue',
+      accessorKey: 'averageCost',
+      header: 'Avg Cost',
+      enableSorting: true,
+      cell: ({ row }) => formatCurrency(row.original.averageCost, row.original.currency),
+      meta: {
+        headerStyle: { textAlign: 'right' },
+        cellStyle: { textAlign: 'right' },
+      },
+    },
+    {
+      accessorKey: 'invested',
+      header: 'Total Invested',
+      enableSorting: true,
+      cell: ({ row }) => formatCurrency(row.original.invested, row.original.currency),
+      meta: {
+        headerStyle: { textAlign: 'right' },
+        cellStyle: { textAlign: 'right' },
+      },
+    },
+    {
+      accessorKey: 'realizedPnl',
+      header: 'Realized P/L',
+      enableSorting: true,
+      cell: ({ row }) => {
+        const value = row.original.realizedPnl;
+        const formatted = formatCurrency(value, row.original.currency);
+        return (
+          <span style={{ color: value >= 0 ? '#16a34a' : '#dc2626' }}>
+            {formatted}
+          </span>
+        );
+      },
+      meta: {
+        headerStyle: { textAlign: 'right' },
+        cellStyle: { textAlign: 'right' },
+      },
+    },
+    {
+      accessorKey: 'marketValueBase',
       header: `Value (${baseCurrency})`,
-      accessor: row => `${CURRENCY_SYMBOLS[baseCurrency] || ''}${row.marketValueBase.toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`,
-      align: 'right',
-      width: 180,
+      enableSorting: true,
+      cell: ({ row }) => {
+        const value = row.original.marketValueBase;
+        return `${CURRENCY_SYMBOLS[baseCurrency] || ''}${value.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
+      },
+      meta: {
+        headerStyle: { textAlign: 'right' },
+        cellStyle: { textAlign: 'right' },
+      },
     },
     {
-      key: 'lastTransaction',
+      accessorKey: 'lastTransaction',
       header: 'Last Transaction',
-      accessor: row => row.lastTransaction ?? '—',
-      width: 140,
+      enableSorting: true,
+      cell: info => (info.getValue() as string | null) ?? '—',
     },
     {
-      key: 'actions',
+      id: 'actions',
       header: '',
-      accessor: row => (
-        <RowActions>
-          <RowActionButton
-            $loading={savingRow === row.stock}
-            disabled={savingRow !== null && savingRow !== row.stock}
+      enableSorting: false,
+      cell: ({ row }) => (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <SmallButton
+            $variant="primary"
+            $loading={savingRow === row.original.stock}
+            disabled={savingRow !== null && savingRow !== row.original.stock}
             onClick={event => {
               event.stopPropagation();
-              handlePositionSnapshot(row);
+              handlePositionSnapshot(row.original);
             }}
           >
-            {savingRow === row.stock ? 'Saving…' : 'Save'}
-          </RowActionButton>
-        </RowActions>
+            {savingRow === row.original.stock ? 'Saving…' : 'Save'}
+          </SmallButton>
+        </div>
       ),
-      width: 120,
+      meta: {
+        cellStyle: { textAlign: 'right' },
+      },
     },
   ], [baseCurrency, handlePositionSnapshot, savingRow]);
 
@@ -663,47 +616,139 @@ export function NavManagementPage() {
     [baseCurrency]
   );
 
+  const renderExpandedRow = useCallback(
+    (row: Row<EnrichedPosition>) => {
+      const item = row.original;
+
+      if (detailLoading) {
+        return <Message $variant="info">Loading value history…</Message>;
+      }
+
+      if (detailError) {
+        return <Message $variant="error">{detailError}</Message>;
+      }
+
+      if (!detailData || detailData.length === 0) {
+        return <Message $variant="info">No historical data available for this position.</Message>;
+      }
+
+      return (
+        <DetailCard>
+          <DetailHeader>
+            <div>
+              <DetailTitle>{item.stock}</DetailTitle>
+              <DetailSubtitle>
+                {item.status} • {item.currency} •{' '}
+                {item.priceDate
+                  ? `Last price ${formatCurrency(item.latestPrice, item.currency)} on ${item.priceDate}`
+                  : 'No recent price'}
+              </DetailSubtitle>
+            </div>
+            <DetailMeta>
+              <span>
+                Shares:{' '}
+                {item.shares.toLocaleString(undefined, {
+                  minimumFractionDigits: 0,
+                  maximumFractionDigits: 4,
+                })}
+              </span>
+              <span>
+                Value ({baseCurrency}): {formatCurrency(item.marketValueBase, baseCurrency)}
+              </span>
+              <span>
+                Date Range:{' '}
+                {detailData.length
+                  ? `${detailData[0].date} → ${detailData[detailData.length - 1].date}`
+                  : '—'}
+              </span>
+            </DetailMeta>
+          </DetailHeader>
+
+          <ChartContainer>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={detailData}>
+                <defs>
+                  <linearGradient id="navValueGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.6} />
+                    <stop offset="95%" stopColor="#818cf8" stopOpacity={0.1} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={value => value.slice(2)}
+                  minTickGap={30}
+                  stroke="#94a3b8"
+                />
+                <YAxis
+                  tickFormatter={value => formatCurrency(value as number, baseCurrency)}
+                  stroke="#94a3b8"
+                  width={100}
+                  allowDecimals
+                />
+                <Tooltip content={renderTooltip} />
+                <Area
+                  type="monotone"
+                  dataKey="valueBase"
+                  stroke="#4f46e5"
+                  strokeWidth={2}
+                  fill="url(#navValueGradient)"
+                  activeDot={{ r: 4 }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </ChartContainer>
+        </DetailCard>
+      );
+    },
+    [detailLoading, detailError, detailData, baseCurrency, renderTooltip]
+  );
+
   return (
-    <PageContainer>
-      <HeaderCard>
-        <HeaderRow>
-          <div>
-            <Title>NAV Snapshots</Title>
-            <Description>
-              Review every position, including closed positions, and capture a NAV snapshot for record keeping.
-            </Description>
-          </div>
-          <ActionButton
+    <Container>
+      <Header>
+        <HeaderLeft>
+          <Meta>Data Management</Meta>
+          <Title>NAV Snapshots</Title>
+          <Description>
+            Review every position, including closed positions, and capture a NAV snapshot for record keeping.
+          </Description>
+        </HeaderLeft>
+        <HeaderRight>
+          <PageHeaderControls />
+          <Button
             $variant="primary"
             disabled={enrichedPositions.length === 0 || saving || pricesLoading}
             onClick={handleCalculateAll}
           >
             {saving ? 'Calculating...' : 'Calculate All'}
-          </ActionButton>
-        </HeaderRow>
-        <SummaryGrid>
-          <SummaryCard>
-            <SummaryLabel>Total Positions</SummaryLabel>
-            <SummaryValue>{enrichedPositions.length}</SummaryValue>
-          </SummaryCard>
-          <SummaryCard>
-            <SummaryLabel>Active / Closed</SummaryLabel>
-            <SummaryValue>{totals.active} / {totals.closed}</SummaryValue>
-          </SummaryCard>
-          <SummaryCard>
-            <SummaryLabel>Total Invested</SummaryLabel>
-            <SummaryValue>{formatCurrency(totals.investedBase, baseCurrency)}</SummaryValue>
-          </SummaryCard>
-          <SummaryCard>
-            <SummaryLabel>Current Value ({baseCurrency})</SummaryLabel>
-            <SummaryValue>
-              {formatCurrency(totals.totalBase, baseCurrency)}
-            </SummaryValue>
-          </SummaryCard>
-        </SummaryGrid>
-        {statusMessage && <Message $variant="success">{statusMessage}</Message>}
-        {errorMessage && <Message $variant="error">{errorMessage}</Message>}
-      </HeaderCard>
+          </Button>
+        </HeaderRight>
+      </Header>
+
+      <StatsGrid>
+        <StatCard>
+          <StatLabel>Total Positions</StatLabel>
+          <StatValue>{enrichedPositions.length}</StatValue>
+        </StatCard>
+        <StatCard>
+          <StatLabel>Active / Closed</StatLabel>
+          <StatValue>{totals.active} / {totals.closed}</StatValue>
+        </StatCard>
+        <StatCard>
+          <StatLabel>Total Invested</StatLabel>
+          <StatValue>{formatCurrency(totals.investedBase, baseCurrency)}</StatValue>
+        </StatCard>
+        <StatCard>
+          <StatLabel>Current Value ({baseCurrency})</StatLabel>
+          <StatValue>
+            {formatCurrency(totals.totalBase, baseCurrency)}
+          </StatValue>
+        </StatCard>
+      </StatsGrid>
+
+      {statusMessage && <Message $variant="success">{statusMessage}</Message>}
+      {errorMessage && <Message $variant="error">{errorMessage}</Message>}
 
       {loadingTransactions || pricesLoading ? (
         <Message $variant="info">Loading latest positions…</Message>
@@ -711,89 +756,18 @@ export function NavManagementPage() {
         <Message $variant="error">No transactions available. Import transactions to build NAV snapshots.</Message>
       ) : (
         <>
-          <AdvancedTable
-            data={enrichedPositions}
-            columns={columns}
-            defaultSortKey="lastTransaction"
-            defaultSortDirection="desc"
-            onRowClick={handleRowClick}
-            rowIsActive={row => selectedRow?.stock === row.stock}
-          />
-
-          {selectedRow && (
-            <DetailCard>
-              <DetailHeader>
-                <div>
-                  <DetailTitle>{selectedRow.stock}</DetailTitle>
-                  <DetailSubtitle>
-                    {selectedRow.status} • {selectedRow.currency} •{' '}
-                    {selectedRow.priceDate
-                      ? `Last price ${formatCurrency(selectedRow.latestPrice, selectedRow.currency)} on ${selectedRow.priceDate}`
-                      : 'No recent price'}
-                  </DetailSubtitle>
-                </div>
-                <DetailMeta>
-                  <span>
-                    Shares:{' '}
-                    {selectedRow.shares.toLocaleString(undefined, {
-                      minimumFractionDigits: 0,
-                      maximumFractionDigits: 4,
-                    })}
-                  </span>
-                  <span>
-                    Value ({baseCurrency}): {formatCurrency(selectedRow.marketValueBase, baseCurrency)}
-                  </span>
-                  <span>
-                    Date Range:{' '}
-                    {detailData?.length
-                      ? `${detailData[0].date} → ${detailData[detailData.length - 1].date}`
-                      : '—'}
-                  </span>
-                </DetailMeta>
-              </DetailHeader>
-
-              {detailLoading && <Message $variant="info">Loading value history…</Message>}
-              {!detailLoading && detailError && <Message $variant="error">{detailError}</Message>}
-              {!detailLoading && !detailError && detailData && detailData.length > 0 && (
-                <ChartContainer>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={detailData}>
-                      <defs>
-                        <linearGradient id="navValueGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.6} />
-                          <stop offset="95%" stopColor="#818cf8" stopOpacity={0.1} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                      <XAxis
-                        dataKey="date"
-                        tickFormatter={value => value.slice(2)}
-                        minTickGap={30}
-                        stroke="#94a3b8"
-                      />
-                      <YAxis
-                        tickFormatter={value => formatCurrency(value as number, baseCurrency)}
-                        stroke="#94a3b8"
-                        width={100}
-                        allowDecimals
-                      />
-                      <Tooltip content={renderTooltip} />
-                      <Area
-                        type="monotone"
-                        dataKey="valueBase"
-                        stroke="#4f46e5"
-                        strokeWidth={2}
-                        fill="url(#navValueGradient)"
-                        activeDot={{ r: 4 }}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </ChartContainer>
-              )}
-            </DetailCard>
-          )}
+          <Card>
+            <TanStackTable
+              data={enrichedPositions}
+              columns={columns}
+              onRowClick={handleRowClick}
+              renderExpandedRow={renderExpandedRow}
+              emptyMessage="No positions available"
+              initialSorting={[{ id: 'lastTransaction', desc: true }]}
+            />
+          </Card>
         </>
       )}
-    </PageContainer>
+    </Container>
   );
 }

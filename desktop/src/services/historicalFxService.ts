@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/tauri';
 import { FxRateRecord } from '../types/FxRateData';
+import { CURRENCY_PAIRS } from '../config/currencies';
 
 interface YahooFxPair {
   from: string;
@@ -7,11 +8,12 @@ interface YahooFxPair {
   yahooSymbol: string;
 }
 
-const FX_PAIRS: YahooFxPair[] = [
-  { from: 'USD', to: 'TWD', yahooSymbol: 'USDTWD=X' },
-  { from: 'USD', to: 'JPY', yahooSymbol: 'USDJPY=X' },
-  { from: 'USD', to: 'HKD', yahooSymbol: 'USDHKD=X' },
-];
+// Generate FX pairs from config - Yahoo Finance uses format like "USDJPY=X"
+const FX_PAIRS: YahooFxPair[] = CURRENCY_PAIRS.map(pair => ({
+  from: pair.from,
+  to: pair.to,
+  yahooSymbol: `${pair.from}${pair.to}=X`,
+}));
 
 export class HistoricalFxService {
   async downloadFxPair(fromCurrency: string, toCurrency: string): Promise<void> {

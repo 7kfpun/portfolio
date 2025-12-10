@@ -98,6 +98,81 @@ export const useYourStore = create<YourState>((set, get) => ({
 
 ## Component Guidelines
 
+### Chart Library (lightweight-charts v5)
+
+**CRITICAL**: Always use lightweight-charts v5 API syntax:
+
+```typescript
+import { createChart, AreaSeries, LineSeries, HistogramSeries } from 'lightweight-charts';
+
+const chart = createChart(container, options);
+
+// v5 API - use addSeries with series type
+const areaSeries = chart.addSeries(AreaSeries, { /* options */ });
+const lineSeries = chart.addSeries(LineSeries, { /* options */ });
+const histogramSeries = chart.addSeries(HistogramSeries, { /* options */ });
+```
+
+**DO NOT** use v4 API:
+```typescript
+// ❌ WRONG - v4 API (deprecated)
+chart.addAreaSeries();
+chart.addLineSeries();
+chart.addHistogramSeries();
+```
+
+### Table Components
+
+**ALWAYS** use the reusable `AdvancedTable` component for data tables:
+
+```typescript
+import { AdvancedTable, Column } from '../components/AdvancedTable';
+
+const columns: Column<DataType>[] = [
+  {
+    key: 'field1',
+    header: 'Column Name',
+    accessor: (row) => row.field1,
+    sortable: true,
+    align: 'left',
+  },
+];
+
+<AdvancedTable
+  data={dataArray}
+  columns={columns}
+  defaultSortKey="field1"
+  defaultSortDirection="asc"
+/>
+```
+
+**DO NOT** create custom `<table>` elements with styled-components unless there's a specific design requirement that AdvancedTable cannot handle.
+
+### Reusable Components
+
+**MetricCard Component** - Use for displaying key-value metrics in cards:
+
+```typescript
+import { MetricCard } from '../components/MetricCard';
+
+const metrics = [
+  {
+    label: 'Metric Name',
+    value: 'Value or JSX',
+    helpText: 'Optional tooltip text',
+    valueColor: '#10b981', // Optional color for value
+  },
+];
+
+<MetricCard title="Section Title" metrics={metrics} />
+```
+
+Benefits:
+- Consistent styling across metric displays
+- Built-in help icon tooltips
+- Responsive hover states
+- Clean, maintainable code
+
 ### Component Structure
 
 ```typescript
