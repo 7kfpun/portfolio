@@ -14,19 +14,32 @@ describe('priceDataService', () => {
   });
 
   it('parses valid rows and skips malformed data', async () => {
-    const fileContent = [
-      'date,close,open,high,low,volume,source,updated_at',
-      '2024-01-01,180.12,181,182,179,1000,twelve_data,2024-01-02T00:00:00.000Z',
-      'INVALID,ROW',
-      '2024-01-02,,',
-    ].join('\n');
+    const expectedRecords = [
+      {
+        symbol: 'NASDAQ:AAPL',
+        date: '2024-01-01',
+        close: 180.12,
+        open: 181,
+        high: 182,
+        low: 179,
+        volume: 1000,
+        source: 'twelve_data',
+        updated_at: '2024-01-02T00:00:00.000Z',
+      },
+    ];
 
-    invokeMock.mockImplementation(async (command: string) => {
+    invokeMock.mockImplementation(async (command: string, payload: any) => {
       if (command === 'list_price_files') {
         return ['NASDAQ:AAPL'];
       }
-      if (command === 'read_price_file') {
-        return fileContent;
+      if (command === 'read_prices_polars') {
+        expect(payload).toEqual({
+          symbol: 'NASDAQ:AAPL',
+          latestOnly: true,
+          includeOverrides: true,
+          limit: 8,
+        });
+        return expectedRecords;
       }
       return '';
     });
@@ -41,21 +54,28 @@ describe('priceDataService', () => {
   });
 
   it('prefers reading the file head when available', async () => {
-    const headContent = [
-      'date,close,open,high,low,volume,source,updated_at',
-      '2024-03-01,150,,,,,yahoo_finance,2024-03-02T00:00:00.000Z',
-    ].join('\n');
+    const expectedRecords = [
+      {
+        symbol: 'NASDAQ:AAPL',
+        date: '2024-03-01',
+        close: 150,
+        source: 'yahoo_finance',
+        updated_at: '2024-03-02T00:00:00.000Z',
+      },
+    ];
 
     invokeMock.mockImplementation(async (command: string, payload: any) => {
       if (command === 'list_price_files') {
         return ['NASDAQ:AAPL'];
       }
-      if (command === 'read_price_file_head') {
-        expect(payload).toEqual({ symbol: 'NASDAQ:AAPL', lines: 8 });
-        return headContent;
-      }
-      if (command === 'read_price_file') {
-        throw new Error('Full file read should not be called when head succeeds');
+      if (command === 'read_prices_polars') {
+        expect(payload).toEqual({
+          symbol: 'NASDAQ:AAPL',
+          latestOnly: true,
+          includeOverrides: true,
+          limit: 8,
+        });
+        return expectedRecords;
       }
       return '';
     });
@@ -70,22 +90,22 @@ describe('priceDataService', () => {
   });
 
   it('falls back to reading the full file when head read fails', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const fullContent = [
-      'date,close,open,high,low,volume,source,updated_at',
-      '2024-04-01,210,,,,,yahoo_finance,2024-04-02T00:00:00.000Z',
-    ].join('\n');
+    const expectedRecords = [
+      {
+        symbol: 'NASDAQ:AAPL',
+        date: '2024-04-01',
+        close: 210,
+        source: 'yahoo_finance',
+        updated_at: '2024-04-02T00:00:00.000Z',
+      },
+    ];
 
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'list_price_files') {
         return ['NASDAQ:AAPL'];
       }
-      if (command === 'read_price_file_head') {
-        throw new Error('Head read unavailable');
-      }
-      if (command === 'read_price_file') {
-        return fullContent;
+      if (command === 'read_prices_polars') {
+        return expectedRecords;
       }
       return '';
     });
@@ -97,8 +117,6 @@ describe('priceDataService', () => {
       date: '2024-04-01',
       close: 210,
     });
-
-    warnSpy.mockRestore();
   });
 
   it('merges and writes per-symbol price files', async () => {

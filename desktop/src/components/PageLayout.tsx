@@ -4,18 +4,19 @@ import { useSettingsStore } from '../store/settingsStore';
 import { CurrencySelector } from './CurrencySelector';
 
 export const PageContainer = styled.div`
-  max-width: 1400px;
+  width: 100%;
+  max-width: 1200px;
   margin: 0 auto;
+  padding: 0 1rem;
+  box-sizing: border-box;
 `;
 
 export const Container = styled.div`
-  max-width: 1400px;
+  width: 100%;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 0 1rem;
-
-  @media (min-width: 768px) {
-    padding: 0;
-  }
+  box-sizing: border-box;
 `;
 
 export const Header = styled.div`
@@ -272,5 +273,38 @@ export function PageHeaderControls() {
         Privacy {privacyMode ? 'On' : 'Off'}
       </PrivacyToggleButton>
     </>
+  );
+}
+
+// Reusable Page Header Component
+interface PageHeaderProps {
+  meta?: string;
+  title: string;
+  description?: string;
+  actions?: React.ReactNode;
+  showControls?: boolean;
+}
+
+export function PageHeader({
+  meta,
+  title,
+  description,
+  actions,
+  showControls = true
+}: PageHeaderProps) {
+  return (
+    <Header>
+      <HeaderRow>
+        <HeaderLeft>
+          {meta && <Meta>{meta}</Meta>}
+          <Title>{title}</Title>
+          {description && <Description>{description}</Description>}
+        </HeaderLeft>
+        <HeaderRight>
+          {showControls && <PageHeaderControls />}
+          {actions}
+        </HeaderRight>
+      </HeaderRow>
+    </Header>
   );
 }

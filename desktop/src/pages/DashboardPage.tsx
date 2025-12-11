@@ -5,9 +5,8 @@ import { useTransactionsStore } from '../store/transactionsStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { Position } from '../types/Portfolio';
 import { CurrencyType } from '../types/Settings';
-import { CurrencySelector } from '../components/CurrencySelector';
 import { MetricCard } from '../components/MetricCard';
-import { PageContainer, Header, HeaderRow, Meta, Title, Description, HeaderLeft, HeaderRight, PageHeaderControls } from '../components/PageLayout';
+import { PageContainer, PageHeader } from '../components/PageLayout';
 import {
     Activity,
     TrendingUp,
@@ -15,47 +14,9 @@ import {
     DollarSign,
     PieChart,
     BarChart3,
-    SlidersHorizontal,
 } from 'lucide-react';
 import { priceDataService } from '../services/priceDataService';
 import { CURRENCY_SYMBOLS, getCurrencyColor } from '../config/currencies';
-
-const RefreshButton = styled.button<{ $loading?: boolean }>`
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.5rem;
-  border: none;
-  border-radius: 8px;
-  font-weight: 600;
-  font-size: 0.95rem;
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  color: white;
-  cursor: pointer;
-  transition: transform 120ms ease, box-shadow 120ms ease;
-
-  svg {
-    animation: ${props => (props.$loading ? 'spin 1s linear infinite' : 'none')};
-  }
-
-  @keyframes spin {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-  }
-
-  &:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
-  }
-
-  @media (max-width: 768px) {
-    padding: 0.6rem 1.2rem;
-    font-size: 0.9rem;
-  }
-`;
 
 const Stats = styled.div`
   display: grid;
@@ -299,38 +260,74 @@ const LoadingText = styled.p`
 `;
 
 export function DashboardPage() {
-    const { positions, summary, loadPositions } = usePortfolioStore();
+    const { positions, summary, loadPositions, fxRates } = usePortfolioStore();
     const { transactions, loadTransactions } = useTransactionsStore();
-    const { baseCurrency, setBaseCurrency, privacyMode } = useSettingsStore();
-
-    const [isLoading, setIsLoading] = useState(false);
-    const [dailyMovers, setDailyMovers] = useState<Array<{
-        stock: string;
-        currency: string;
-        dailyChange: number;
-        dailyChangePercent: number;
-        currentValue: number;
-    }>>([]);
-
-    const handleBaseCurrencyChange = useCallback((currency: CurrencyType) => {
-        setBaseCurrency(currency);
-    }, [setBaseCurrency]);
-
-    const handleRefresh = useCallback(async () => {
-        setIsLoading(true);
-        try {
-            await loadPositions();
-            await loadTransactions();
-        } catch (error) {
-            console.error('Failed to refresh data:', error);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [loadPositions, loadTransactions]);
+    const { baseCurrency, privacyMode } = useSettingsStore();
 
     useEffect(() => {
-        handleRefresh();
-    }, []);
+        loadPositions();
+        loadTransactions();
+    }, [loadPositions, loadTransactions]);
+
+    const [dailyPriceData, setDailyPriceData] = useState<Map<string, { latest: number; previous: number }>>(new Map());
+
+    useEffect(() => {
+        const loadDailyPrices = async () => {
+            try {
+                const dailyPrices = await priceDataService.getDailyPrices();
+                const priceMap = new Map<string, { latest: number; previous: number }>();
+
+                for (const [symbol, data] of dailyPrices) {
+                    if (data.latest && data.previous) {
+                        priceMap.set(symbol, {
+                            latest: data.latest.close,
+                            previous: data.previous.close,
+                        });
+                    }
+                }
+
+                setDailyPriceData(priceMap);
+            } catch (error) {
+                console.error('Failed to load daily prices:', error);
+            }
+        };
+
+        if (positions.length > 0) {
+            loadDailyPrices();
+        }
+    }, [positions.length]);
+
+    const dailyMovers = useMemo(() => {
+        // Calculate daily movers from positions with actual price data
+        const movers = positions
+            .filter(pos => {
+                if (!pos.currentPrice || pos.shares === 0) return false;
+                const priceData = dailyPriceData.get(pos.stock);
+                return priceData !== undefined;
+            })
+            .map(pos => {
+                const priceData = dailyPriceData.get(pos.stock)!;
+                const latest = priceData.latest;
+                const previous = priceData.previous;
+
+                // Calculate daily change
+                const priceChange = latest - previous;
+                const dailyChangePercent = (priceChange / previous) * 100;
+                const dailyChange = priceChange * pos.shares;
+
+                return {
+                    stock: pos.stock,
+                    currency: pos.currency,
+                    dailyChange,
+                    dailyChangePercent,
+                    currentValue: pos.currentValue || 0,
+                };
+            })
+            .sort((a, b) => Math.abs(b.dailyChangePercent) - Math.abs(a.dailyChangePercent))
+            .slice(0, 5);
+
+        return movers;
+    }, [positions, dailyPriceData]);
 
     const displayCurrencyValue = useCallback((value: number, currency: string) => {
         if (privacyMode) return '•••••';
@@ -346,18 +343,17 @@ export function DashboardPage() {
     }, [privacyMode]);
 
     const convertToBaseCurrency = useCallback((amount: number, fromCurrency: string, toCurrency: string) => {
-        // Simplified conversion - in real app, use actual FX rates
         if (fromCurrency === toCurrency) return amount;
-        // For demo, assume 1 USD = 30 TWD, 150 JPY, 7.8 HKD
-        const rates: Record<string, number> = {
-            USD: 1,
-            TWD: 30,
-            JPY: 150,
-            HKD: 7.8,
-        };
-        const usdAmount = amount / (rates[fromCurrency] || 1);
-        return usdAmount * (rates[toCurrency] || 1);
-    }, []);
+
+        // Get FX rates from store (rates are stored as currency -> USD rate)
+        // To convert: fromCurrency -> USD -> toCurrency
+        const fromRate = fxRates.get(fromCurrency) ?? (fromCurrency === 'USD' ? 1 : 1);
+        const toRate = fxRates.get(toCurrency) ?? (toCurrency === 'USD' ? 1 : 1);
+
+        // Convert to USD first, then to target currency
+        const usdAmount = amount * fromRate;
+        return usdAmount / toRate;
+    }, [fxRates]);
 
     const totalsInBaseCurrency = useMemo(() => {
         if (!summary) return { totalValue: 0, totalCost: 0, totalGainLoss: 0 };
@@ -481,26 +477,11 @@ export function DashboardPage() {
 
     return (
         <PageContainer>
-            <Header>
-                <HeaderRow>
-                    <HeaderLeft>
-                        <Meta>Dashboard</Meta>
-                        <Title>My Portfolio</Title>
-                        <Description>
-                            {positions.length} position{positions.length !== 1 ? 's' : ''} across{' '}
-                            {summary ? Object.keys(summary.byCurrency).length : 0} currenc
-                            {summary ? (Object.keys(summary.byCurrency).length !== 1 ? 'ies' : 'y') : 'y'}
-                        </Description>
-                    </HeaderLeft>
-                    <HeaderRight>
-                        <PageHeaderControls />
-                        <RefreshButton onClick={handleRefresh} disabled={isLoading} $loading={isLoading}>
-                            <SlidersHorizontal size={16} />
-                            Refresh
-                        </RefreshButton>
-                    </HeaderRight>
-                </HeaderRow>
-            </Header>
+            <PageHeader
+                meta="Dashboard"
+                title="My Portfolio"
+                description={`${positions.length} position${positions.length !== 1 ? 's' : ''} across ${summary ? Object.keys(summary.byCurrency).length : 0} currenc${summary ? (Object.keys(summary.byCurrency).length !== 1 ? 'ies' : 'y') : 'y'}`}
+            />
 
             <Stats>
                 <StatCard>

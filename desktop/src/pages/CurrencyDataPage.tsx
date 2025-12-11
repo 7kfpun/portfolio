@@ -11,12 +11,13 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Container, Header, HeaderLeft, HeaderRight, Meta, Title, Description, Card, Button, SmallButton, PageHeaderControls } from '../components/PageLayout';
+import { Container, PageHeader, Card, Button, SmallButton } from '../components/PageLayout';
 import { TanStackTable } from '../components/TanStackTable';
 import { historicalFxService } from '../services/historicalFxService';
 import { fxRateDataService } from '../services/fxRateDataService';
 import { FxRateRecord } from '../types/FxRateData';
 import { CURRENCY_PAIRS } from '../config/currencies';
+import { useFxOverridesStore, FX_TABLE_PAGE_SIZE } from '../store/fxOverridesStore';
 
 const spin = keyframes`
   from { transform: rotate(0deg); }
@@ -123,6 +124,137 @@ const ChartWrapper = styled.div`
   height: 220px;
 `;
 
+const ViewToggle = styled.div`
+  display: inline-flex;
+  background: #f1f5f9;
+  border-radius: 999px;
+  padding: 0.25rem;
+  gap: 0.25rem;
+`;
+
+const ToggleButton = styled.button<{ $active?: boolean }>`
+  border: none;
+  background: ${props => (props.$active ? '#ffffff' : 'transparent')};
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.75rem;
+  color: ${props => (props.$active ? '#0f172a' : '#475569')};
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover {
+    background: #fff;
+  }
+`;
+
+const TableWrapper = styled.div`
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+`;
+
+const EditableTable = styled.table`
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+
+  th,
+  td {
+    padding: 0.5rem;
+    border-bottom: 1px solid #e2e8f0;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  th {
+    background: #f8fafc;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #475569;
+  }
+`;
+
+const EditableInput = styled.input`
+  width: 100%;
+  border: 1px solid #cbd5f5;
+  border-radius: 4px;
+  padding: 0.25rem 0.375rem;
+  font-size: 0.8rem;
+  font-family: 'Inter', sans-serif;
+
+  &:focus {
+    border-color: #6366f1;
+    outline: none;
+    box-shadow: 0 0 0 1px #6366f1;
+  }
+`;
+
+const TableActions = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+`;
+
+const InlineBadge = styled.span<{ $tone?: 'neutral' | 'success' | 'error' }>`
+  font-size: 0.75rem;
+  border-radius: 12px;
+  padding: 0.2rem 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: ${props => {
+    switch (props.$tone) {
+      case 'success':
+        return '#dcfce7';
+      case 'error':
+        return '#fee2e2';
+      default:
+        return '#e2e8f0';
+    }
+  }};
+  color: ${props => {
+    switch (props.$tone) {
+      case 'success':
+        return '#15803d';
+      case 'error':
+        return '#b91c1c';
+      default:
+        return '#475569';
+    }
+  }};
+`;
+
+const PaginationControls = styled.div`
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+`;
+
+const PaginationButton = styled.button`
+  border: 1px solid #cbd5f5;
+  background: #fff;
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.1s;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  &:hover:not(:disabled) {
+    background: #f1f5f9;
+  }
+`;
+
 const EmptyState = styled.div`
   padding: 2rem;
   text-align: center;
@@ -156,6 +288,19 @@ export function CurrencyDataPage() {
   const [seriesState, setSeriesState] = useState<
     Record<string, { loading: boolean; data?: FxRateRecord[]; error?: string }>
   >({});
+  const pairStates = useFxOverridesStore(state => state.items);
+  const ensurePairState = useFxOverridesStore(state => state.ensureItem);
+  const setPairViewMode = useFxOverridesStore(state => state.setViewMode);
+  const addPairRow = useFxOverridesStore(state => state.addRow);
+  const updatePairRowField = useFxOverridesStore(state => state.updateRowField);
+  const revertPairRow = useFxOverridesStore(state => state.revertRow);
+  const removePairRow = useFxOverridesStore(state => state.removeRow);
+  const replacePairRows = useFxOverridesStore(state => state.replaceRows);
+  const setPairPage = useFxOverridesStore(state => state.setPage);
+  const setPairSaving = useFxOverridesStore(state => state.setSaving);
+  const setPairFeedback = useFxOverridesStore(state => state.setFeedback);
+  const clearPairPending = useFxOverridesStore(state => state.clearPending);
+  const getPairPendingRows = useFxOverridesStore(state => state.getPendingRows);
   const [downloadAllProgress, setDownloadAllProgress] = useState<{
     current: number;
     total: number;
@@ -200,39 +345,151 @@ export function CurrencyDataPage() {
   const getPairKey = (fromCurrency: string, toCurrency: string) =>
     `${fromCurrency}_${toCurrency}`;
 
-  const handleRowClick = async (row: Row<CurrencyPairData>) => {
-    const item = row.original;
+  const handleToggleViewMode = (key: string, mode: 'chart' | 'table', fallbackData?: FxRateRecord[]) => {
+    if (!pairStates[key] && fallbackData) {
+      ensurePairState(key, fallbackData);
+    }
+    setPairViewMode(key, mode);
+  };
+
+  const handleAddOverrideRow = (item: CurrencyPairData) => {
     const key = getPairKey(item.fromCurrency, item.toCurrency);
+    if (!pairStates[key]) {
+      const baseRows = seriesState[key]?.data ?? [];
+      ensurePairState(key, baseRows);
+    }
+    addPairRow(key, { from_currency: item.fromCurrency, to_currency: item.toCurrency, source: 'manual' });
+  };
 
-    row.toggleExpanded();
+  const handleEditableCellChange = (
+    key: string,
+    rowId: string,
+    field: 'date' | 'rate',
+    value: string
+  ) => {
+    if (field === 'rate') {
+      const numValue = parseFloat(value);
+      updatePairRowField(key, rowId, field, (Number.isFinite(numValue) ? numValue : value) as any);
+    } else {
+      updatePairRowField(key, rowId, field, value);
+    }
+  };
 
-    if (!row.getIsExpanded()) {
-      const existing = seriesState[key];
-      if (existing?.data || existing?.loading) {
-        return;
+  const handleRevertRow = (key: string, rowId: string) => {
+    revertPairRow(key, rowId);
+  };
+
+  const handleRemoveRow = (key: string, rowId: string) => {
+    removePairRow(key, rowId);
+  };
+
+  const handleSaveOverrides = async (item: CurrencyPairData) => {
+    const key = getPairKey(item.fromCurrency, item.toCurrency);
+    const pairState = pairStates[key];
+    if (!pairState) return;
+
+    const pendingRows = Object.values(pairState.pending);
+
+    if (!pendingRows.length) {
+      setPairFeedback(key, { status: 'error', message: 'Add at least one dated row before saving' });
+      return;
+    }
+
+    setPairSaving(key, true);
+    setPairFeedback(key, undefined);
+
+    try {
+      const toDelete = pendingRows.filter((row: any) => row._shouldDelete);
+      const toSave = pendingRows.filter((row: any) => !row._shouldDelete);
+
+      const datesToDelete = new Set<string>();
+      for (const deleteRow of toDelete) {
+        datesToDelete.add(deleteRow.date);
       }
+
+      for (const saveRow of toSave) {
+        if ((saveRow as any)._originalDate && (saveRow as any)._originalDate !== saveRow.date) {
+          datesToDelete.add((saveRow as any)._originalDate);
+        }
+      }
+
+      for (const dateToDelete of datesToDelete) {
+        await fxRateDataService.removeOverrideRate(
+          item.fromCurrency,
+          item.toCurrency,
+          dateToDelete
+        );
+      }
+
+      if (toSave.length > 0) {
+        await fxRateDataService.saveOverrideRatesForPair(item.fromCurrency, item.toCurrency, toSave);
+      }
+
+      const refreshed = await fxRateDataService.getRatesForPair(item.fromCurrency, item.toCurrency);
 
       setSeriesState(prev => ({
         ...prev,
-        [key]: { loading: true },
+        [key]: {
+          loading: false,
+          data: refreshed,
+        },
       }));
+      replacePairRows(key, refreshed);
+      clearPairPending(key);
+      setPairFeedback(key, { status: 'success', message: 'Saved overrides' });
+      await loadCurrencyData();
+      setTimeout(() => {
+        setPairFeedback(key, undefined);
+      }, 3000);
+    } catch (error) {
+      console.error('Failed to save overrides', error);
+      setPairFeedback(key, { status: 'error', message: 'Failed to save overrides' });
+    } finally {
+      setPairSaving(key, false);
+    }
+  };
 
-      try {
-        const rates = await fxRateDataService.getRatesForPair(
-          item.fromCurrency,
-          item.toCurrency
-        );
+  const handleRowClick = async (row: Row<CurrencyPairData>) => {
+    const item = row.original;
+    const key = getPairKey(item.fromCurrency, item.toCurrency);
+    const willExpand = !row.getIsExpanded();
 
-        setSeriesState(prev => ({
-          ...prev,
-          [key]: { loading: false, data: rates },
-        }));
-      } catch (error) {
-        setSeriesState(prev => ({
-          ...prev,
-          [key]: { loading: false, error: 'Failed to load chart data' },
-        }));
-      }
+    row.toggleExpanded();
+
+    if (!willExpand) {
+      return;
+    }
+
+    const existing = seriesState[key];
+    if (existing?.data) {
+      ensurePairState(key, existing.data);
+      return;
+    }
+    if (existing?.loading) {
+      return;
+    }
+
+    setSeriesState(prev => ({
+      ...prev,
+      [key]: { loading: true },
+    }));
+
+    try {
+      const rates = await fxRateDataService.getRatesForPair(
+        item.fromCurrency,
+        item.toCurrency
+      );
+
+      setSeriesState(prev => ({
+        ...prev,
+        [key]: { loading: false, data: rates },
+      }));
+      replacePairRows(key, rates);
+    } catch (error) {
+      setSeriesState(prev => ({
+        ...prev,
+        [key]: { loading: false, error: 'Failed to load chart data' },
+      }));
     }
   };
 
@@ -292,6 +549,11 @@ export function CurrencyDataPage() {
       await handleDownloadPair(pair.from, pair.to);
       current++;
       setDownloadAllProgress({ current, total: CURRENCY_PAIRS.length });
+
+      // Rate limiting: wait 100ms between downloads
+      if (current < CURRENCY_PAIRS.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
 
     setTimeout(() => {
@@ -471,6 +733,31 @@ export function CurrencyDataPage() {
         return <StatusBadge $status="error">No historical data available yet.</StatusBadge>;
       }
 
+      const pairState = pairStates[key];
+      const viewMode = pairState?.viewMode ?? 'chart';
+      const rows = pairState?.rows ?? [];
+      const totalRowCount = rows.length;
+      const totalPages = totalRowCount > 0 ? Math.ceil(totalRowCount / FX_TABLE_PAGE_SIZE) : 1;
+      const currentPage = Math.min(pairState?.page ?? 0, Math.max(totalPages - 1, 0));
+      const pageStartIndex = currentPage * FX_TABLE_PAGE_SIZE;
+      const pagedRows =
+        totalRowCount > 0
+          ? rows.slice(pageStartIndex, pageStartIndex + FX_TABLE_PAGE_SIZE)
+          : [];
+      const pageStartDisplay = totalRowCount > 0 ? pageStartIndex + 1 : 0;
+      const pageEndDisplay = totalRowCount > 0 ? pageStartIndex + pagedRows.length : 0;
+      const canGoPrev = currentPage > 0;
+      const canGoNext = currentPage < totalPages - 1 && totalRowCount > 0;
+      const isSaving = Boolean(pairState?.saving);
+      const feedback = pairState?.feedback;
+      const pendingCount = Object.keys(pairState?.pending ?? {}).length;
+      const dirty = pendingCount > 0;
+
+      const updatePage = (nextPage: number) => {
+        const clamped = Math.max(0, Math.min(totalPages - 1, nextPage));
+        setPairPage(key, clamped);
+      };
+
       return (
         <ChartContainer>
           <ChartHeader>
@@ -486,67 +773,233 @@ export function CurrencyDataPage() {
               <StatBadge>Min: {formatRate(chartInfo.min, 4)}</StatBadge>
               <StatBadge>Max: {formatRate(chartInfo.max, 4)}</StatBadge>
               <StatBadge>Last: {formatRate(chartInfo.latest, 4)}</StatBadge>
+              <ViewToggle>
+                <ToggleButton
+                  type="button"
+                  $active={viewMode === 'chart'}
+                  onClick={() => handleToggleViewMode(key, 'chart')}
+                >
+                  Chart
+                </ToggleButton>
+                <ToggleButton
+                  type="button"
+                  $active={viewMode === 'table'}
+                  onClick={() => {
+                    handleToggleViewMode(key, 'table', series.data ?? []);
+                  }}
+                >
+                  Table
+                </ToggleButton>
+              </ViewToggle>
             </ChartStats>
           </ChartHeader>
-          <ChartWrapper>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartInfo.data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id={`rateGradient-${key}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis
-                  dataKey="date"
-                  minTickGap={20}
-                  tickFormatter={formatTickDate}
-                  fontSize={10}
-                  stroke="#94a3b8"
-                />
-                <YAxis
-                  domain={[chartInfo.min, chartInfo.max]}
-                  width={60}
-                  tickFormatter={value => formatRate(value as number, 4)}
-                  fontSize={10}
-                  stroke="#94a3b8"
-                />
-                <Tooltip
-                  formatter={value => formatRate(value as number, 6)}
-                  labelFormatter={value => value}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="rate"
-                  stroke="#6366f1"
-                  strokeWidth={2}
-                  fill={`url(#rateGradient-${key})`}
-                  isAnimationActive={false}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </ChartWrapper>
+          {viewMode === 'chart' ? (
+            <ChartWrapper>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartInfo.data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id={`rateGradient-${key}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="date"
+                    minTickGap={20}
+                    tickFormatter={formatTickDate}
+                    fontSize={10}
+                    stroke="#94a3b8"
+                  />
+                  <YAxis
+                    domain={[chartInfo.min, chartInfo.max]}
+                    width={60}
+                    tickFormatter={value => formatRate(value as number, 4)}
+                    fontSize={10}
+                    stroke="#94a3b8"
+                  />
+                  <Tooltip
+                    formatter={value => formatRate(value as number, 6)}
+                    labelFormatter={value => value}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="rate"
+                    stroke="#6366f1"
+                    strokeWidth={2}
+                    fill={`url(#rateGradient-${key})`}
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </ChartWrapper>
+          ) : (
+            <>
+              <TableActions>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <SmallButton $variant="ghost" onClick={() => handleAddOverrideRow(item)}>
+                    + Add Row
+                  </SmallButton>
+                  {dirty && <InlineBadge $tone="neutral">Unsaved changes</InlineBadge>}
+                  {feedback && <InlineBadge $tone={feedback.status}>{feedback.message}</InlineBadge>}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <SmallButton
+                    $variant="primary"
+                    onClick={() => handleSaveOverrides(item)}
+                    disabled={isSaving}
+                    $loading={isSaving}
+                    style={{ minWidth: '120px' }}
+                  >
+                    {isSaving ? 'Saving…' : 'Save overrides'}
+                  </SmallButton>
+                </div>
+              </TableActions>
+              <TableWrapper>
+                <EditableTable>
+                  <thead>
+                    <tr>
+                      <th style={{ width: '140px' }}>Date (YYYY-MM-DD)</th>
+                      <th style={{ width: '120px' }}>Rate</th>
+                      <th>Source</th>
+                      <th>Updated</th>
+                      <th style={{ width: '110px' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {totalRowCount === 0 ? (
+                      <tr>
+                        <td colSpan={5} style={{ textAlign: 'center', padding: '1rem' }}>
+                          No data available
+                        </td>
+                      </tr>
+                    ) : (
+                      pagedRows.map(row => {
+                        const isNewRow = !row.original;
+                        const isManualOverride = row.original?.source === 'manual';
+                        const hasEdits = Boolean(
+                          row.original &&
+                          (row.date !== row.original.date || row.rate !== row.original.rate)
+                        );
+                        const isMarkedForDeletion = row._markedForDeletion === true;
+                        const canRevert = isManualOverride || hasEdits;
+                        const revertLabel = isMarkedForDeletion ? 'Undo' : hasEdits ? 'Revert' : 'Delete';
+                        const isDisabled = isMarkedForDeletion;
+                        const rowStyle = isMarkedForDeletion
+                          ? { opacity: 0.5, textDecoration: 'line-through' }
+                          : {};
+                        return (
+                          <tr key={row._rowId} style={rowStyle}>
+                            <td>
+                              <EditableInput
+                                type="text"
+                                value={row.date}
+                                placeholder="YYYY-MM-DD"
+                                pattern="\d{4}-\d{2}-\d{2}"
+                                disabled={isDisabled}
+                                onChange={event =>
+                                  handleEditableCellChange(
+                                    key,
+                                    row._rowId,
+                                    'date',
+                                    event.target.value
+                                  )
+                                }
+                              />
+                            </td>
+                            <td>
+                              <EditableInput
+                                type="number"
+                                step="0.000001"
+                                value={Number.isFinite(row.rate) ? row.rate : ''}
+                                disabled={isDisabled}
+                                onChange={event =>
+                                  handleEditableCellChange(
+                                    key,
+                                    row._rowId,
+                                    'rate',
+                                    event.target.value
+                                  )
+                                }
+                              />
+                            </td>
+                            <td>{row.source === 'manual' ? 'Manual' : 'Yahoo Finance'}</td>
+                            <td>{row.updated_at ? new Date(row.updated_at).toLocaleString() : '-'}</td>
+                            <td>
+                              {isNewRow ? (
+                                <SmallButton
+                                  $variant="ghost"
+                                  onClick={() => handleRemoveRow(key, row._rowId)}
+                                >
+                                  Remove
+                                </SmallButton>
+                              ) : (
+                                <SmallButton
+                                  $variant="ghost"
+                                  disabled={!canRevert}
+                                  onClick={() => handleRevertRow(key, row._rowId)}
+                                >
+                                  {revertLabel}
+                                </SmallButton>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </EditableTable>
+              </TableWrapper>
+              {totalRowCount > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                  <PaginationControls>
+                    <span>
+                      Showing {pageStartDisplay}-{pageEndDisplay} of {totalRowCount}
+                    </span>
+                    <PaginationButton
+                      type="button"
+                      onClick={() => updatePage(currentPage - 1)}
+                      disabled={!canGoPrev}
+                    >
+                      Prev
+                    </PaginationButton>
+                    <PaginationButton
+                      type="button"
+                      onClick={() => updatePage(currentPage + 1)}
+                      disabled={!canGoNext}
+                    >
+                      Next
+                    </PaginationButton>
+                  </PaginationControls>
+                </div>
+              )}
+            </>
+          )}
         </ChartContainer>
       );
     },
-    [seriesState]
+    [
+      seriesState,
+      pairStates,
+      handleToggleViewMode,
+      handleAddOverrideRow,
+      handleSaveOverrides,
+      handleEditableCellChange,
+      handleRevertRow,
+      handleRemoveRow,
+      setPairPage,
+    ]
   );
 
   const isDownloadingAny = downloading.size > 0;
 
   return (
     <Container>
-      <Header>
-        <HeaderLeft>
-          <Meta>Data Management</Meta>
-          <Title>Currency Data</Title>
-          <Description>Manage foreign exchange rate data for all supported currencies</Description>
-        </HeaderLeft>
-        <HeaderRight>
-          <PageHeaderControls />
-        </HeaderRight>
-      </Header>
+      <PageHeader
+        meta="Data Management"
+        title="Currency Data"
+        description="Manage foreign exchange rate data for all supported currencies"
+      />
 
       <Card>
         <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

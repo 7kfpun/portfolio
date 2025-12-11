@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import styled from 'styled-components';
 import { ColumnDef, Row } from '@tanstack/react-table';
-import { Container, Header, HeaderLeft, HeaderRight, Meta, Title, Description, Card, Button, SmallButton, PageHeaderControls } from '../components/PageLayout';
+import { Container, PageHeader, Card, Button, SmallButton } from '../components/PageLayout';
 import { TanStackTable } from '../components/TanStackTable';
 import { useTransactionsStore } from '../store/transactionsStore';
 import { usePortfolioStore } from '../store/portfolioStore';
@@ -706,16 +706,11 @@ export function NavManagementPage() {
 
   return (
     <Container>
-      <Header>
-        <HeaderLeft>
-          <Meta>Data Management</Meta>
-          <Title>NAV Snapshots</Title>
-          <Description>
-            Review every position, including closed positions, and capture a NAV snapshot for record keeping.
-          </Description>
-        </HeaderLeft>
-        <HeaderRight>
-          <PageHeaderControls />
+      <PageHeader
+        meta="Data Management"
+        title="NAV Snapshots"
+        description="Review every position, including closed positions, and capture a NAV snapshot for record keeping."
+        actions={
           <Button
             $variant="primary"
             disabled={enrichedPositions.length === 0 || saving || pricesLoading}
@@ -723,8 +718,8 @@ export function NavManagementPage() {
           >
             {saving ? 'Calculating...' : 'Calculate All'}
           </Button>
-        </HeaderRight>
-      </Header>
+        }
+      />
 
       <StatsGrid>
         <StatCard>

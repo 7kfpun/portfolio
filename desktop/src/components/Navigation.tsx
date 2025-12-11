@@ -1,5 +1,5 @@
 import styled from 'styled-components';
-import { PieChart, List, Settings, BarChart3, FileText, Key, Database, DollarSign, TrendingUp } from 'lucide-react';
+import { PieChart, List, Settings, BarChart3, FileText, Key, Database, DollarSign, TrendingUp, Gift } from 'lucide-react';
 import { PageType, ReportSubPage } from '../store/navigationStore';
 
 const Sidebar = styled.nav`
@@ -177,6 +177,13 @@ export function Navigation({ currentPage, reportSubPage, onNavigate, onReportSub
             <BarChart3 size={16} />
             Heatmaps
           </SubNavButton>
+          <SubNavButton
+            $active={reportSubPage === 'dividends'}
+            onClick={() => handleSubNavClick('dividends')}
+          >
+            <Gift size={16} />
+            Dividends
+          </SubNavButton>
         </SubNavLinks>
         <NavButton
           $active={currentPage === 'settings' || currentPage.startsWith('settings-')}
@@ -198,7 +205,7 @@ export function Navigation({ currentPage, reportSubPage, onNavigate, onReportSub
             onClick={() => onNavigate('settings-data-readiness')}
           >
             <Database size={16} />
-            Data Readiness
+            Stock Data
           </SubNavButton>
           <SubNavButton
             $active={currentPage === 'settings-currency-data'}

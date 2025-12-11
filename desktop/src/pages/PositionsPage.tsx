@@ -184,7 +184,7 @@ interface DisplayPosition extends Position {
 }
 
 export function PositionsPage() {
-    const { positions, summary, loadPositions } = usePortfolioStore();
+    const { positions, summary, loadPositions, fxRates } = usePortfolioStore();
     const { transactions, loadTransactions } = useTransactionsStore();
     const { baseCurrency, setBaseCurrency } = useSettingsStore();
     const { setCurrentPage } = useNavigationStore();
@@ -226,18 +226,17 @@ export function PositionsPage() {
     }, []);
 
     const convertToBaseCurrency = useCallback((amount: number, fromCurrency: string, toCurrency: string) => {
-        // Simplified conversion - in real app, use actual FX rates
         if (fromCurrency === toCurrency) return amount;
-        // For demo, assume 1 USD = 30 TWD, 150 JPY, 7.8 HKD
-        const rates: Record<string, number> = {
-            USD: 1,
-            TWD: 30,
-            JPY: 150,
-            HKD: 7.8,
-        };
-        const usdAmount = amount / (rates[fromCurrency] || 1);
-        return usdAmount * (rates[toCurrency] || 1);
-    }, []);
+
+        // Get FX rates from store (rates are stored as currency -> USD rate)
+        // To convert: fromCurrency -> USD -> toCurrency
+        const fromRate = fxRates.get(fromCurrency) ?? (fromCurrency === 'USD' ? 1 : 1);
+        const toRate = fxRates.get(toCurrency) ?? (toCurrency === 'USD' ? 1 : 1);
+
+        // Convert to USD first, then to target currency
+        const usdAmount = amount * fromRate;
+        return usdAmount / toRate;
+    }, [fxRates]);
 
     const uniqueCurrencies = useMemo(() => {
         const currencies = new Set(positions.map(p => p.currency));

@@ -1,0 +1,316 @@
+# Portfolio Manager - Backend AI Rules
+
+## Project Overview
+Rust/Tauri backend for portfolio management application. Handles file system operations, CSV processing, and external API calls with rate limiting.
+
+## Tech Stack
+- Rust 1.7x + Tauri v1.5
+- CSV processing with Rust standard library
+- File system operations
+- HTTP client for Yahoo Finance API
+- Rate limiting with tokio::time
+
+## Architecture
+- **Commands**: Tauri command handlers in main.rs
+- **Services**: Business logic for data processing
+- **Storage**: CSV files in app data directory
+- **APIs**: Yahoo Finance integration with rate limiting
+
+## Command Structure
+
+### ALWAYS follow this pattern for Tauri commands:
+
+```rust
+#[tauri::command]
+async fn command_name(arg: String) -> Result<String, String> {
+    // Input validation
+    if arg.is_empty() {
+        return Err("Argument cannot be empty".to_string());
+    }
+
+    // Business logic
+    match process_data(arg).await {
+        Ok(result) => Ok(serde_json::to_string(&result).unwrap()),
+        Err(e) => Err(format!("Processing failed: {}", e)),
+    }
+}
+```
+
+### Register commands in main.rs:
+```rust
+fn main() {
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            command_name,
+            another_command,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+## File System Operations
+
+### App Data Directory
+```rust
+use tauri::api::path::app_data_dir;
+
+// Get app data directory
+let app_data_dir = app_data_dir(&config).unwrap();
+let data_path = app_data_dir.join("data");
+
+// Create directory if it doesn't exist
+std::fs::create_dir_all(&data_path)?;
+
+// File paths
+let transactions_path = data_path.join("transactions.csv");
+let prices_path = data_path.join("prices.csv");
+```
+
+### CSV Reading/Writing
+```rust
+use std::fs;
+use std::io::{Read, Write};
+
+// Read CSV file
+fn read_csv_file(path: &Path) -> Result<String, String> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(content),
+        Err(e) => Err(format!("Failed to read file: {}", e)),
+    }
+}
+
+// Write CSV file (overwrite)
+fn write_csv_file(path: &Path, content: &str) -> Result<(), String> {
+    match fs::write(path, content) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Failed to write file: {}", e)),
+    }
+}
+
+// Append to CSV file
+fn append_csv_file(path: &Path, content: &str) -> Result<(), String> {
+    let mut file = match fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) => return Err(format!("Failed to open file: {}", e)),
+    };
+
+    match writeln!(file, "{}", content) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Failed to append to file: {}", e)),
+    }
+}
+```
+
+## Error Handling
+
+### Use Result types consistently:
+```rust
+type AppResult<T> = Result<T, String>;
+
+fn process_data(input: String) -> AppResult<Data> {
+    // Validation
+    if input.is_empty() {
+        return Err("Input cannot be empty".to_string());
+    }
+
+    // Processing with error propagation
+    let parsed = parse_input(input)?;
+    let validated = validate_data(parsed)?;
+
+    Ok(validated)
+}
+```
+
+### Handle file operations safely:
+```rust
+fn safe_file_operation(path: &Path) -> AppResult<String> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err("File not found".to_string())
+        }
+        Err(e) => Err(format!("IO error: {}", e)),
+    }
+}
+```
+
+## Rate Limiting
+
+### Implement rate limiting for API calls:
+```rust
+use tokio::time::{sleep, Duration};
+
+async fn rate_limited_api_call(symbol: &str) -> AppResult<PriceData> {
+    // Rate limit: 100ms between calls
+    sleep(Duration::from_millis(100)).await;
+
+    // Make API call
+    match yahoo_finance_api::get_price(symbol).await {
+        Ok(data) => Ok(data),
+        Err(e) => Err(format!("API call failed: {}", e)),
+    }
+}
+```
+
+## CSV Processing
+
+### Parse CSV data:
+```rust
+use csv::Reader;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct TransactionRecord {
+    date: String,
+    stock: String,
+    transaction_type: String,
+    quantity: String,
+    price: String,
+    fees: String,
+    split_ratio: String,
+    currency: String,
+}
+
+fn parse_transactions(csv_content: &str) -> AppResult<Vec<TransactionRecord>> {
+    let mut reader = Reader::from_reader(csv_content.as_bytes());
+    let mut records = Vec::new();
+
+    for result in reader.deserialize() {
+        match result {
+            Ok(record) => records.push(record),
+            Err(e) => return Err(format!("CSV parsing error: {}", e)),
+        }
+    }
+
+    Ok(records)
+}
+```
+
+## Async/Await Patterns
+
+### Use async for I/O operations:
+```rust
+#[tauri::command]
+async fn download_historical_data(symbols: Vec<String>) -> Result<String, String> {
+    let mut results = Vec::new();
+
+    for symbol in symbols {
+        match download_symbol_data(&symbol).await {
+            Ok(data) => results.push(data),
+            Err(e) => eprintln!("Failed to download {}: {}", symbol, e),
+        }
+    }
+
+    Ok(serde_json::to_string(&results).unwrap())
+}
+```
+
+## Dependencies
+
+### Key crates to use:
+```toml
+[dependencies]
+tauri = { version = "1.5", features = ["shell-open"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+csv = "1.1"
+reqwest = { version = "0.11", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+```
+
+## Testing
+
+### Unit tests for utilities:
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_csv_parsing() {
+        let csv_data = "date,stock,type\n2024-01-01,AAPL,Buy";
+        let result = parse_transactions(csv_data);
+        assert!(result.is_ok());
+        let records = result.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].stock, "AAPL");
+    }
+
+    #[tokio::test]
+    async fn test_api_call() {
+        let result = rate_limited_api_call("AAPL").await;
+        // Test both success and error cases
+    }
+}
+```
+
+## Code Organization
+
+### main.rs structure:
+```rust
+mod commands;
+mod services;
+mod models;
+mod utils;
+
+use commands::*;
+use services::*;
+use models::*;
+use utils::*;
+
+fn main() {
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            // List all commands here
+            read_csv,
+            write_csv,
+            download_prices,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+## Security Best Practices
+
+- Validate all input parameters
+- Use safe file paths (no .. in paths)
+- Handle file permissions properly
+- Rate limit external API calls
+- Log errors without exposing sensitive data
+- Use HTTPS for external requests
+
+## Performance
+
+- Use async I/O for file operations
+- Stream large CSV files instead of loading entirely
+- Cache frequently accessed data
+- Implement connection pooling for HTTP requests
+- Use efficient data structures for large datasets
+
+## Logging
+
+### Use eprintln! for errors, println! for debug:
+```rust
+#[tauri::command]
+async fn process_data(input: String) -> Result<String, String> {
+    println!("Processing input: {}", input); // Debug info
+
+    match do_processing(input).await {
+        Ok(result) => {
+            println!("Processing completed successfully");
+            Ok(result)
+        }
+        Err(e) => {
+            eprintln!("Processing failed: {}", e); // Error log
+            Err("Processing failed".to_string()) // User-friendly error
+        }
+    }
+}
+```

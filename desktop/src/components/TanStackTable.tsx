@@ -21,13 +21,15 @@ const TableContainer = styled.div`
 `;
 
 const TableWrapper = styled.div`
-  overflow-x: auto;
+  width: 100%;
   max-height: 600px;
   overflow-y: auto;
+  overflow-x: auto;
 `;
 
 const Table = styled.table`
   width: 100%;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 0.8rem;
 `;

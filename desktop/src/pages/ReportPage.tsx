@@ -16,9 +16,16 @@ const HeatmapsPage = lazy(() =>
     import('./HeatmapsPage').then(module => ({ default: module.HeatmapsPage }))
 );
 
+const DividendsPage = lazy(() =>
+    import('./DividendsPage').then(module => ({ default: module.DividendsPage }))
+);
+
 const Container = styled.div`
-  max-width: 1400px;
+  width: 100%;
+  max-width: 1200px;
   margin: 0 auto;
+  padding: 0 1rem;
+  box-sizing: border-box;
 `;
 
 export function ReportPage() {
@@ -30,6 +37,8 @@ export function ReportPage() {
                 return <PositionsPage />;
             case 'heatmaps':
                 return <HeatmapsPage />;
+            case 'dividends':
+                return <DividendsPage />;
             default:
                 return <PositionsPage />;
         }

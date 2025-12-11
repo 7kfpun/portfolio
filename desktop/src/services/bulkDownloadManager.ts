@@ -1,6 +1,6 @@
 import { historicalDataService } from './historicalDataService';
 
-const DOWNLOAD_DELAY_MS = 10_000;
+const DOWNLOAD_DELAY_MS = 100;
 
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 

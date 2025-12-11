@@ -11,12 +11,14 @@ import {
   YAxis,
   Legend,
 } from 'recharts';
-import { Container, Header, HeaderLeft, HeaderRight, Meta, Title, Description, Card, PageHeaderControls } from '../components/PageLayout';
+import { Container, PageHeader, Card, SmallButton } from '../components/PageLayout';
 import { historicalDataService } from '../services/historicalDataService';
 import { bulkDownloadManager, BulkDownloadState } from '../services/bulkDownloadManager';
 import { StockDataCoverage, SplitHistory } from '../types/HistoricalData';
 import { priceDataService } from '../services/priceDataService';
 import { PriceRecord } from '../types/PriceData';
+import { usePriceOverridesStore, PRICE_TABLE_PAGE_SIZE, validatePriceRecords } from '../store/priceOverridesStore';
+import { EditableOverrideTable, ColumnConfig } from '../components/EditableOverrideTable';
 
 const TableContainer = styled.div`
   border: 1px solid #cbd5e1;
@@ -259,6 +261,59 @@ const SpinnerIcon = styled(Loader2)`
   animation: ${spin} 1s linear infinite;
 `;
 
+const ViewToggle = styled.div`
+  display: inline-flex;
+  background: #f1f5f9;
+  border-radius: 999px;
+  padding: 0.25rem;
+  gap: 0.25rem;
+`;
+
+const ToggleButton = styled.button<{ $active?: boolean }>`
+  border: none;
+  background: ${props => (props.$active ? '#ffffff' : 'transparent')};
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.75rem;
+  color: ${props => (props.$active ? '#0f172a' : '#475569')};
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover {
+    background: #fff;
+  }
+`;
+
+const InlineBadge = styled.span<{ $tone?: 'neutral' | 'success' | 'error' }>`
+  font-size: 0.75rem;
+  border-radius: 12px;
+  padding: 0.2rem 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: ${props => {
+    switch (props.$tone) {
+      case 'success':
+        return '#dcfce7';
+      case 'error':
+        return '#fee2e2';
+      default:
+        return '#e2e8f0';
+    }
+  }};
+  color: ${props => {
+    switch (props.$tone) {
+      case 'success':
+        return '#15803d';
+      case 'error':
+        return '#b91c1c';
+      default:
+        return '#475569';
+    }
+  }};
+`;
+
 export function DataReadinessPage() {
   const [dataCoverage, setDataCoverage] = useState<StockDataCoverage[]>([]);
   const [splitHistory, setSplitHistory] = useState<SplitHistory[]>([]);
@@ -273,6 +328,20 @@ export function DataReadinessPage() {
   const feedbackTimeouts = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevBulkRunningRef = useRef<boolean>(bulkState.running);
+
+  const symbolStates = usePriceOverridesStore(state => state.items);
+  const ensureSymbolState = usePriceOverridesStore(state => state.ensureItem);
+  const setSymbolViewMode = usePriceOverridesStore(state => state.setViewMode);
+  const addSymbolRow = usePriceOverridesStore(state => state.addRow);
+  const updateSymbolRowField = usePriceOverridesStore(state => state.updateRowField);
+  const revertSymbolRow = usePriceOverridesStore(state => state.revertRow);
+  const removeSymbolRow = usePriceOverridesStore(state => state.removeRow);
+  const replaceSymbolRows = usePriceOverridesStore(state => state.replaceRows);
+  const setSymbolPage = usePriceOverridesStore(state => state.setPage);
+  const setSymbolSaving = usePriceOverridesStore(state => state.setSaving);
+  const setSymbolFeedback = usePriceOverridesStore(state => state.setFeedback);
+  const clearSymbolPending = usePriceOverridesStore(state => state.clearPending);
+  const getSymbolPendingRows = usePriceOverridesStore(state => state.getPendingRows);
 
   const coverageMap = useMemo(() => {
     const map = new Map<string, StockDataCoverage>();
@@ -469,7 +538,11 @@ export function DataReadinessPage() {
     setExpandedTicker(ticker);
 
     const existing = seriesState[ticker];
-    if (existing?.data || existing?.loading) {
+    if (existing?.data) {
+      ensureSymbolState(ticker, existing.data);
+      return;
+    }
+    if (existing?.loading) {
       return;
     }
 
@@ -484,12 +557,183 @@ export function DataReadinessPage() {
         ...prev,
         [ticker]: { loading: false, data: prices },
       }));
+      replaceSymbolRows(ticker, prices);
     } catch (error) {
       console.error('Failed to load price series:', error);
       setSeriesState(prev => ({
         ...prev,
         [ticker]: { loading: false, error: 'Failed to load chart data' },
       }));
+    }
+  };
+
+  const handleToggleViewMode = (ticker: string, mode: 'chart' | 'table', fallbackData?: PriceRecord[]) => {
+    if (!symbolStates[ticker] && fallbackData) {
+      ensureSymbolState(ticker, fallbackData);
+    }
+    setSymbolViewMode(ticker, mode);
+  };
+
+  const handleAddOverrideRow = (ticker: string) => {
+    const baseRows = seriesState[ticker]?.data ?? [];
+
+    // Ensure state exists
+    if (!symbolStates[ticker]) {
+      ensureSymbolState(ticker, baseRows);
+    }
+
+    // Switch to table mode so the new row is visible
+    setSymbolViewMode(ticker, 'table');
+
+    // Add the new row
+    addSymbolRow(ticker, {
+      symbol: ticker,
+      date: '',
+      close: 0,
+      source: 'manual',
+      updated_at: new Date().toISOString(),
+    });
+  };
+
+  const handleEditableCellChange = (
+    ticker: string,
+    rowId: string,
+    field: string,
+    value: string
+  ) => {
+    if (field === 'close' || field === 'open' || field === 'high' || field === 'low' || field === 'volume') {
+      const numValue = parseFloat(value);
+      updateSymbolRowField(ticker, rowId, field, (Number.isFinite(numValue) ? numValue : value) as any);
+    } else {
+      updateSymbolRowField(ticker, rowId, field, value);
+    }
+  };
+
+  const handleRevertRow = (ticker: string, rowId: string) => {
+    revertSymbolRow(ticker, rowId);
+  };
+
+  const handleRemoveRow = (ticker: string, rowId: string) => {
+    removeSymbolRow(ticker, rowId);
+  };
+
+  const handleSaveOverrides = async (ticker: string) => {
+    const symbolState = symbolStates[ticker];
+    if (!symbolState) return;
+
+    const pendingRows = Object.values(symbolState.pending);
+
+    // If no pending rows, check if there are edited rows and validate them to show real errors
+    if (!pendingRows.length) {
+      const editedRows = symbolState.rows.filter(row => !row.original || row._markedForDeletion);
+
+      if (!editedRows.length) {
+        setSymbolFeedback(ticker, {
+          status: 'error',
+          message: 'No changes to save'
+        });
+        return;
+      }
+
+      // Try to build payloads to get validation errors
+      const rawPayloads = editedRows.map(row => {
+        const close = typeof row.close === 'number' ? row.close : parseFloat(row.close as any);
+        const parseOptionalNumber = (val: any): number | undefined => {
+          if (val === undefined || val === null || val === '') return undefined;
+          const num = typeof val === 'number' ? val : parseFloat(val);
+          return Number.isFinite(num) ? num : undefined;
+        };
+
+        return {
+          symbol: row.symbol,
+          date: row.date || '',
+          close: Number.isFinite(close) ? close : 0,
+          open: parseOptionalNumber(row.open),
+          high: parseOptionalNumber(row.high),
+          low: parseOptionalNumber(row.low),
+          volume: parseOptionalNumber(row.volume),
+          source: 'manual' as const,
+          updated_at: new Date().toISOString(),
+        };
+      });
+
+      const validation = validatePriceRecords(rawPayloads);
+      if (!validation.valid) {
+        const errorMessage = validation.errors.join('; ');
+        setSymbolFeedback(ticker, {
+          status: 'error',
+          message: errorMessage
+        });
+        console.error('Validation errors:', validation.errors);
+        return;
+      }
+
+      setSymbolFeedback(ticker, {
+        status: 'error',
+        message: 'Please fill in date and close price for at least one row'
+      });
+      return;
+    }
+
+    // Validate all pending rows with Zod
+    const validation = validatePriceRecords(pendingRows);
+    if (!validation.valid) {
+      const errorMessage = validation.errors.join('; ');
+      setSymbolFeedback(ticker, {
+        status: 'error',
+        message: errorMessage
+      });
+      console.error('Validation errors:', validation.errors);
+      return;
+    }
+
+    setSymbolSaving(ticker, true);
+    setSymbolFeedback(ticker, undefined);
+
+    try {
+      const toDelete = pendingRows.filter((row: any) => row._shouldDelete);
+      const toSave = pendingRows.filter((row: any) => !row._shouldDelete);
+
+      const datesToDelete = new Set<string>();
+      for (const deleteRow of toDelete) {
+        datesToDelete.add(deleteRow.date);
+      }
+
+      for (const saveRow of toSave) {
+        if ((saveRow as any)._originalDate && (saveRow as any)._originalDate !== saveRow.date) {
+          datesToDelete.add((saveRow as any)._originalDate);
+        }
+      }
+
+      for (const dateToDelete of datesToDelete) {
+        await priceDataService.removeOverridePrice(ticker, dateToDelete);
+      }
+
+      if (toSave.length > 0) {
+        await priceDataService.saveOverridePricesForSymbol(ticker, toSave);
+      }
+
+      const refreshed = await priceDataService.getPricesForSymbol(ticker);
+
+      setSeriesState(prev => ({
+        ...prev,
+        [ticker]: {
+          loading: false,
+          data: refreshed,
+        },
+      }));
+      replaceSymbolRows(ticker, refreshed);
+      clearSymbolPending(ticker);
+      setSymbolFeedback(ticker, { status: 'success', message: 'Saved overrides' });
+      await loadDataCoverage();
+      setTimeout(() => {
+        setSymbolFeedback(ticker, undefined);
+      }, 3000);
+    } catch (error) {
+      console.error('Failed to save overrides', error);
+      setSymbolFeedback(ticker, { status: 'error', message: 'Failed to save overrides' });
+    } finally {
+      setSymbolSaving(ticker, false);
     }
   };
 
@@ -596,18 +840,11 @@ export function DataReadinessPage() {
 
   return (
     <Container>
-      <Header>
-        <HeaderLeft>
-          <Meta>Data Management</Meta>
-          <Title>Historical Stock Data</Title>
-          <Description>
-            Download and monitor 15 years of stock prices & splits across all tracked tickers.
-          </Description>
-        </HeaderLeft>
-        <HeaderRight>
-          <PageHeaderControls />
-        </HeaderRight>
-      </Header>
+      <PageHeader
+        meta="Data Management"
+        title="Historical Stock Data"
+        description="Download and monitor 15 years of stock prices & splits across all tracked tickers."
+      />
 
       <Card>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.75rem' }}>
@@ -766,95 +1003,195 @@ export function DataReadinessPage() {
                                   {series.error}
                                 </DownloadFeedbackText>
                               )}
-                              {!series?.loading && !series?.error && chartInfo && (
-                                <ChartContainer>
-                                  <ChartHeader>
-                                    <div>
-                                      <ChartTitle>{item.ticker} price history</ChartTitle>
-                                      <ChartSubtitle>
-                                        Showing last {chartInfo.count} days ({chartInfo.startDate} → {chartInfo.endDate})
-                                      </ChartSubtitle>
-                                    </div>
-                                    <ChartStats>
-                                      <StatBadge>Min: {formatPrice(chartInfo.min, 2)}</StatBadge>
-                                      <StatBadge>Max: {formatPrice(chartInfo.max, 2)}</StatBadge>
-                                      <StatBadge>Last: {formatPrice(chartInfo.latest, 2)}</StatBadge>
-                                    </ChartStats>
-                                  </ChartHeader>
-                                  <ChartWrapper>
-                                    <ResponsiveContainer width="100%" height="100%">
-                                      <AreaChart data={chartInfo.data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                                        <defs>
-                                          <linearGradient id={`priceGradient-${item.ticker}`} x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.3} />
-                                            <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
-                                          </linearGradient>
-                                          <linearGradient id={`adjustedGradient-${item.ticker}`} x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="#16a34a" stopOpacity={0.3} />
-                                            <stop offset="95%" stopColor="#16a34a" stopOpacity={0} />
-                                          </linearGradient>
-                                          <linearGradient id={`unadjustedGradient-${item.ticker}`} x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="5%" stopColor="#9333ea" stopOpacity={0.3} />
-                                            <stop offset="95%" stopColor="#9333ea" stopOpacity={0} />
-                                          </linearGradient>
-                                        </defs>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                                        <XAxis
-                                          dataKey="date"
-                                          minTickGap={20}
-                                          tickFormatter={formatTickDate}
-                                          fontSize={10}
-                                          stroke="#94a3b8"
-                                        />
-                                        <YAxis
-                                          domain={[chartInfo.min, chartInfo.max]}
-                                          width={70}
-                                          tickFormatter={value => formatPrice(value as number, 2)}
-                                          fontSize={10}
-                                          stroke="#94a3b8"
-                                        />
-                                        <Tooltip
-                                          formatter={(value, name) => [
-                                            formatPrice(value as number, 4),
-                                            name === 'close' ? 'Close' :
-                                              name === 'adjusted_close' ? 'Adj Close' :
-                                                name === 'split_unadjusted_close' ? 'Split Unadj' : name
-                                          ]}
-                                          labelFormatter={value => value}
-                                        />
-                                        <Legend />
-                                        <Area
-                                          type="monotone"
-                                          dataKey="split_unadjusted_close"
-                                          name="Split Unadj"
-                                          stroke="#9333ea"
-                                          strokeWidth={2}
-                                          fill={`url(#unadjustedGradient-${item.ticker})`}
-                                          isAnimationActive={false}
-                                        />
-                                        <Area
-                                          type="monotone"
-                                          dataKey="adjusted_close"
-                                          name="Adj Close"
-                                          stroke="#16a34a"
-                                          strokeWidth={2}
-                                          fill={`url(#adjustedGradient-${item.ticker})`}
-                                          isAnimationActive={false}
-                                        />
-                                        <Area
-                                          type="monotone"
-                                          dataKey="close"
-                                          name="Close"
-                                          stroke="#0ea5e9"
-                                          strokeWidth={2}
-                                          fill={`url(#priceGradient-${item.ticker})`}
-                                          isAnimationActive={false}
-                                        />
-                                      </AreaChart>
-                                    </ResponsiveContainer>
-                                  </ChartWrapper>
-                                </ChartContainer>
-                              )}
+                              {!series?.loading && !series?.error && chartInfo && (() => {
+                                const symbolState = symbolStates[item.ticker];
+                                const viewMode = symbolState?.viewMode ?? 'chart';
+
+                                return (
+                                  <ChartContainer>
+                                    <ChartHeader>
+                                      <div>
+                                        <ChartTitle>{item.ticker} price history</ChartTitle>
+                                        <ChartSubtitle>
+                                          Showing last {chartInfo.count} days ({chartInfo.startDate} → {chartInfo.endDate})
+                                        </ChartSubtitle>
+                                      </div>
+                                      <ChartStats>
+                                        <StatBadge>Min: {formatPrice(chartInfo.min, 2)}</StatBadge>
+                                        <StatBadge>Max: {formatPrice(chartInfo.max, 2)}</StatBadge>
+                                        <StatBadge>Last: {formatPrice(chartInfo.latest, 2)}</StatBadge>
+                                        <ViewToggle>
+                                          <ToggleButton
+                                            type="button"
+                                            $active={viewMode === 'chart'}
+                                            onClick={() => handleToggleViewMode(item.ticker, 'chart')}
+                                          >
+                                            Chart
+                                          </ToggleButton>
+                                          <ToggleButton
+                                            type="button"
+                                            $active={viewMode === 'table'}
+                                            onClick={() => handleToggleViewMode(item.ticker, 'table', series.data ?? [])}
+                                          >
+                                            Table
+                                          </ToggleButton>
+                                        </ViewToggle>
+                                      </ChartStats>
+                                    </ChartHeader>
+                                    {viewMode === 'chart' ? (
+                                      <ChartWrapper>
+                                        <ResponsiveContainer width="100%" height="100%">
+                                          <AreaChart data={chartInfo.data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                                            <defs>
+                                              <linearGradient id={`priceGradient-${item.ticker}`} x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.3} />
+                                                <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
+                                              </linearGradient>
+                                              <linearGradient id={`adjustedGradient-${item.ticker}`} x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#16a34a" stopOpacity={0.3} />
+                                                <stop offset="95%" stopColor="#16a34a" stopOpacity={0} />
+                                              </linearGradient>
+                                              <linearGradient id={`unadjustedGradient-${item.ticker}`} x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#9333ea" stopOpacity={0.3} />
+                                                <stop offset="95%" stopColor="#9333ea" stopOpacity={0} />
+                                              </linearGradient>
+                                            </defs>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                                            <XAxis
+                                              dataKey="date"
+                                              minTickGap={20}
+                                              tickFormatter={formatTickDate}
+                                              fontSize={10}
+                                              stroke="#94a3b8"
+                                            />
+                                            <YAxis
+                                              domain={[chartInfo.min, chartInfo.max]}
+                                              width={70}
+                                              tickFormatter={value => formatPrice(value as number, 2)}
+                                              fontSize={10}
+                                              stroke="#94a3b8"
+                                            />
+                                            <Tooltip
+                                              formatter={(value, name) => [
+                                                formatPrice(value as number, 4),
+                                                name === 'close' ? 'Close' :
+                                                  name === 'adjusted_close' ? 'Adj Close' :
+                                                    name === 'split_unadjusted_close' ? 'Split Unadj' : name
+                                              ]}
+                                              labelFormatter={value => value}
+                                            />
+                                            <Legend />
+                                            <Area
+                                              type="monotone"
+                                              dataKey="split_unadjusted_close"
+                                              name="Split Unadj"
+                                              stroke="#9333ea"
+                                              strokeWidth={2}
+                                              fill={`url(#unadjustedGradient-${item.ticker})`}
+                                              isAnimationActive={false}
+                                            />
+                                            <Area
+                                              type="monotone"
+                                              dataKey="adjusted_close"
+                                              name="Adj Close"
+                                              stroke="#16a34a"
+                                              strokeWidth={2}
+                                              fill={`url(#adjustedGradient-${item.ticker})`}
+                                              isAnimationActive={false}
+                                            />
+                                            <Area
+                                              type="monotone"
+                                              dataKey="close"
+                                              name="Close"
+                                              stroke="#0ea5e9"
+                                              strokeWidth={2}
+                                              fill={`url(#priceGradient-${item.ticker})`}
+                                              isAnimationActive={false}
+                                            />
+                                          </AreaChart>
+                                        </ResponsiveContainer>
+                                      </ChartWrapper>
+                                    ) : (
+                                      <EditableOverrideTable
+                                        rows={symbolState?.rows ?? []}
+                                        columns={[
+                                          {
+                                            key: 'date',
+                                            header: 'Date (YYYY-MM-DD)',
+                                            width: '140px',
+                                            editable: true,
+                                            type: 'text',
+                                            pattern: '\\d{4}-\\d{2}-\\d{2}',
+                                          },
+                                          {
+                                            key: 'close',
+                                            header: 'Close',
+                                            width: '100px',
+                                            editable: true,
+                                            type: 'number',
+                                            step: '0.01',
+                                          },
+                                          {
+                                            key: 'open',
+                                            header: 'Open',
+                                            width: '100px',
+                                            editable: true,
+                                            type: 'number',
+                                            step: '0.01',
+                                          },
+                                          {
+                                            key: 'high',
+                                            header: 'High',
+                                            width: '100px',
+                                            editable: true,
+                                            type: 'number',
+                                            step: '0.01',
+                                          },
+                                          {
+                                            key: 'low',
+                                            header: 'Low',
+                                            width: '100px',
+                                            editable: true,
+                                            type: 'number',
+                                            step: '0.01',
+                                          },
+                                          {
+                                            key: 'volume',
+                                            header: 'Volume',
+                                            width: '100px',
+                                            editable: true,
+                                            type: 'number',
+                                            step: '1',
+                                          },
+                                          {
+                                            key: 'source',
+                                            header: 'Source',
+                                            render: (row) => row.source === 'manual' ? 'Manual' : 'Yahoo Finance',
+                                          },
+                                          {
+                                            key: 'updated_at',
+                                            header: 'Updated',
+                                            render: (row) => row.updated_at ? new Date(row.updated_at).toLocaleString() : '-',
+                                          },
+                                        ]}
+                                        pageSize={PRICE_TABLE_PAGE_SIZE}
+                                        currentPage={symbolState?.page ?? 0}
+                                        onPageChange={(page) => setSymbolPage(item.ticker, page)}
+                                        onAddRow={() => handleAddOverrideRow(item.ticker)}
+                                        onEditField={(rowId, field, value) => handleEditableCellChange(item.ticker, rowId, field, value)}
+                                        onRevertRow={(rowId) => handleRevertRow(item.ticker, rowId)}
+                                        onRemoveRow={(rowId) => handleRemoveRow(item.ticker, rowId)}
+                                        onSave={() => handleSaveOverrides(item.ticker)}
+                                        saving={symbolState?.saving ?? false}
+                                        feedback={symbolState?.feedback}
+                                        pendingCount={Object.keys(symbolState?.pending ?? {}).length}
+                                        addRowLabel="+ Add Price Row"
+                                        saveLabel="Save price overrides"
+                                      />
+                                    )}
+                                  </ChartContainer>
+                                );
+                              })()}
                               {!series?.loading && !series?.error && !chartInfo && (
                                 <DownloadFeedbackText $status="error">
                                   No price history available yet.

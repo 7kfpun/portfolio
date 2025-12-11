@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { FxRateRecord } from '../types/FxRateData';
 import { parseNumber } from '../utils/csvUtils';
 
+const FX_RATES_HEADER = 'from_currency,to_currency,date,rate,source,updated_at';
+
 export class FxRateDataService {
   private parseFxRateCSV(csvContent: string): FxRateRecord[] {
     if (!csvContent || !csvContent.trim()) {
@@ -47,7 +49,12 @@ export class FxRateDataService {
       const allRecords: FxRateRecord[] = [];
 
       for (const pair of pairs) {
-        const records = await this.loadRatesForPair(pair, { latestOnly: useLatest });
+        if (pair.endsWith('-override')) {
+          continue;
+        }
+        const records = await this.loadRatesForPair(pair, {
+          latestOnly: useLatest,
+        });
         allRecords.push(...records);
       }
 
@@ -94,7 +101,7 @@ export class FxRateDataService {
 
       // Save each pair
       for (const [pair, rates] of grouped) {
-        const existing = await this.loadRatesForPair(pair, { latestOnly: false });
+        const existing = await this.loadRatesForPair(pair, { latestOnly: false, includeOverrides: false });
         const rateMap = new Map<string, FxRateRecord>();
 
         for (const rate of existing) {
@@ -127,58 +134,142 @@ export class FxRateDataService {
     }
   }
 
-  private async readFxRateFile(
-    pair: string,
-    options?: { preferLatest?: boolean }
-  ): Promise<string> {
-    const useLatest = options?.preferLatest ?? false;
-    if (useLatest) {
-      try {
-        const content = await invoke<string>('read_fx_rate_file_head', {
-          pair,
-          lines: 8,
-        });
-        if (content && content.trim()) {
-          return content;
-        }
-      } catch (error) {
-        console.warn(`Failed to read FX rate head for ${pair}:`, error);
-      }
+  private async readFxRateFile(pair: string): Promise<string> {
+    try {
+      return await invoke<string>('read_fx_rate_file', { pair });
+    } catch {
+      return '';
     }
-
-    return await invoke<string>('read_fx_rate_file', { pair });
   }
 
   private async loadRatesForPair(
     pair: string,
-    options?: { latestOnly?: boolean }
+    options?: { latestOnly?: boolean; includeOverrides?: boolean }
   ): Promise<FxRateRecord[]> {
-    try {
-      const content = await this.readFxRateFile(pair, {
-        preferLatest: options?.latestOnly !== false,
-      });
-      let records = this.parseFxRateCSV(content);
-
-      if (records.length === 0 && options?.latestOnly !== false) {
-        const fallbackContent = await this.readFxRateFile(pair, { preferLatest: false });
-        records = this.parseFxRateCSV(fallbackContent);
-      }
-
-      if (options?.latestOnly !== false && records.length > 0) {
-        return [records[0]];
-      }
-
-      return records;
-    } catch (error) {
-      console.error(`Failed to load FX rates for ${pair}:`, error);
+    const [fromCurrency, toCurrency] = pair.split('/');
+    if (!fromCurrency || !toCurrency) {
       return [];
     }
+
+    const latestOnly = options?.latestOnly !== false;
+    const includeOverrides = options?.includeOverrides !== false;
+
+    return await invoke<FxRateRecord[]>('read_fx_rates_polars', {
+      fromCurrency,
+      toCurrency,
+      latestOnly,
+      includeOverrides,
+    });
   }
 
   async getRatesForPair(fromCurrency: string, toCurrency: string): Promise<FxRateRecord[]> {
     const pair = `${fromCurrency}/${toCurrency}`;
-    const records = await this.loadRatesForPair(pair, { latestOnly: false });
+    const records = await this.loadRatesForPair(pair, { latestOnly: false, includeOverrides: true });
     return records.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  }
+
+  async saveOverrideRatesForPair(
+    fromCurrency: string,
+    toCurrency: string,
+    overrideRates: FxRateRecord[]
+  ): Promise<void> {
+    const pair = `${fromCurrency}/${toCurrency}`;
+
+    // Read existing overrides
+    const overrideContent = await invoke<string>('read_fx_rate_file', {
+      pair: `${pair}-override`
+    }).catch(() => '');
+
+    const existingRecords = this.parseFxRateCSV(overrideContent);
+
+    // Create a map of existing records by date
+    const recordMap = new Map<string, FxRateRecord>();
+    for (const record of existingRecords) {
+      recordMap.set(record.date, record);
+    }
+
+    // Add/update with new records
+    const sanitized = overrideRates
+      .filter(record => record.date && !Number.isNaN(record.rate))
+      .map(record => ({
+        ...record,
+        from_currency: fromCurrency,
+        to_currency: toCurrency,
+        source: 'manual' as const,
+        updated_at: new Date().toISOString(),
+      }));
+
+    for (const record of sanitized) {
+      recordMap.set(record.date, record);
+    }
+
+    const allRecords = Array.from(recordMap.values());
+
+    if (!allRecords.length) {
+      try {
+        await invoke('write_fx_rate_override_file', {
+          pair,
+          content: FX_RATES_HEADER + '\n',
+        });
+      } catch (error) {
+        console.warn('Failed to clear override file', error);
+      }
+      return;
+    }
+
+    const csvLines = [FX_RATES_HEADER];
+    for (const rate of allRecords) {
+      csvLines.push(
+        `${rate.from_currency},${rate.to_currency},${rate.date},${rate.rate},${rate.source},${rate.updated_at}`
+      );
+    }
+
+    await invoke('write_fx_rate_override_file', {
+      pair,
+      content: csvLines.join('\n') + '\n',
+    });
+  }
+
+  async removeOverrideRate(
+    fromCurrency: string,
+    toCurrency: string,
+    date: string
+  ): Promise<void> {
+    // This method is used to remove a single override rate
+    // We need to read the existing overrides, filter out the one to delete, and write back
+    const pair = `${fromCurrency}/${toCurrency}`;
+
+    // Read the override file directly
+    const overrideContent = await invoke<string>('read_fx_rate_file', {
+      pair: `${pair}-override`
+    }).catch(() => '');
+
+    const existingRecords = this.parseFxRateCSV(overrideContent);
+    const filteredRecords = existingRecords.filter(record => record.date !== date);
+
+    if (filteredRecords.length === 0) {
+      try {
+        await invoke('write_fx_rate_override_file', {
+          pair,
+          content: FX_RATES_HEADER + '\n',
+        });
+      } catch (error) {
+        console.warn('Failed to clear override file', error);
+      }
+      return;
+    }
+
+    const csvLines = [FX_RATES_HEADER];
+    for (const rate of filteredRecords) {
+      csvLines.push(
+        `${rate.from_currency},${rate.to_currency},${rate.date},${rate.rate},${rate.source},${rate.updated_at}`
+      );
+    }
+
+    await invoke('write_fx_rate_override_file', {
+      pair,
+      content: csvLines.join('\n') + '\n',
+    });
   }
 
   async appendRate(rate: FxRateRecord): Promise<void> {

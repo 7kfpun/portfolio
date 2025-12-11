@@ -7,11 +7,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, Utc};
-use polars::io::csv::CsvWriter;
+use polars::io::csv::{CsvReader, CsvWriter};
 use polars::io::SerWriter;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Transaction {
@@ -33,7 +33,9 @@ fn greet(name: &str) -> String {
 const SETTINGS_HEADER: &str = "key,value\n";
 const SECURITIES_HEADER: &str =
     "ticker,name,exchange,currency,type,sector,data_source,api_symbol,last_updated\n";
-const PRICE_FILE_HEADER: &str = "date,close,open,high,low,volume,adjusted_close,split_unadjusted_close,source,updated_at";
+const PRICE_FILE_HEADER: &str =
+    "date,close,open,high,low,volume,adjusted_close,split_unadjusted_close,source,updated_at";
+const FX_RATES_HEADER: &str = "from_currency,to_currency,date,rate,source,updated_at\n";
 const DIVIDEND_FILE_HEADER: &str = "ex_date,amount,currency,updated_at";
 #[derive(Clone, Debug)]
 struct PriceRecordEntry {
@@ -67,6 +69,325 @@ struct DailyFxRateData {
     previous_date: Option<String>,
 }
 
+#[derive(Serialize, Clone)]
+struct FxRateRecordResponse {
+    from_currency: String,
+    to_currency: String,
+    date: String,
+    rate: f64,
+    source: String,
+    updated_at: String,
+}
+
+fn parse_updated_at_timestamp(value: &str) -> i64 {
+    DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.timestamp_millis())
+        .unwrap_or(0)
+}
+
+fn insert_record_by_updated_at(
+    map: &mut HashMap<String, FxRateRecordResponse>,
+    record: FxRateRecordResponse,
+) {
+    let new_ts = parse_updated_at_timestamp(&record.updated_at);
+    match map.entry(record.date.clone()) {
+        Entry::Vacant(entry) => {
+            entry.insert(record);
+        }
+        Entry::Occupied(mut entry) => {
+            let existing_ts = parse_updated_at_timestamp(&entry.get().updated_at);
+            if new_ts >= existing_ts {
+                entry.insert(record);
+            }
+        }
+    }
+}
+
+fn any_value_to_string(value: AnyValue<'_>) -> Option<String> {
+    match value {
+        AnyValue::String(val) => Some(val.to_string()),
+        AnyValue::StringOwned(val) => Some(val.to_string()),
+        AnyValue::Null => None,
+        _ => None,
+    }
+}
+
+fn any_value_to_f64(value: AnyValue<'_>) -> Option<f64> {
+    match value {
+        AnyValue::Float64(val) => Some(val),
+        AnyValue::Float32(val) => Some(val as f64),
+        AnyValue::Int64(val) => Some(val as f64),
+        AnyValue::Int32(val) => Some(val as f64),
+        AnyValue::UInt64(val) => Some(val as f64),
+        AnyValue::UInt32(val) => Some(val as f64),
+        AnyValue::Int16(val) => Some(val as f64),
+        AnyValue::UInt16(val) => Some(val as f64),
+        AnyValue::Int8(val) => Some(val as f64),
+        AnyValue::UInt8(val) => Some(val as f64),
+        AnyValue::String(val) => val.parse().ok(),
+        AnyValue::StringOwned(val) => val.parse().ok(),
+        _ => None,
+    }
+}
+
+fn read_fx_file_with_polars(path: &Path) -> Result<Vec<FxRateRecordResponse>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let df = CsvReader::from_path(path)
+        .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?
+        .has_header(true)
+        .with_ignore_errors(true)
+        .finish()
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+
+    if df.height() == 0 {
+        return Ok(Vec::new());
+    }
+
+    let from_col = df
+        .column("from_currency")
+        .map_err(|e| format!("Missing 'from_currency' column: {}", e))?
+        .clone();
+    let to_col = df
+        .column("to_currency")
+        .map_err(|e| format!("Missing 'to_currency' column: {}", e))?
+        .clone();
+    let date_col = df
+        .column("date")
+        .map_err(|e| format!("Missing 'date' column: {}", e))?
+        .clone();
+    let rate_col = df
+        .column("rate")
+        .map_err(|e| format!("Missing 'rate' column: {}", e))?
+        .clone();
+    let source_col = df.column("source").ok().cloned();
+    let updated_at_col = df.column("updated_at").ok().cloned();
+
+    let mut records = Vec::with_capacity(df.height());
+    for idx in 0..df.height() {
+        let rate = rate_col.get(idx).ok().and_then(any_value_to_f64);
+        let from_value = from_col.get(idx).ok().and_then(any_value_to_string);
+        let to_value = to_col.get(idx).ok().and_then(any_value_to_string);
+        let date_value = date_col.get(idx).ok().and_then(any_value_to_string);
+
+        if let (Some(rate), Some(from_currency), Some(to_currency), Some(date)) =
+            (rate, from_value, to_value, date_value)
+        {
+            let source = source_col
+                .as_ref()
+                .and_then(|col| col.get(idx).ok().and_then(any_value_to_string))
+                .unwrap_or_else(|| "yahoo_finance".to_string());
+            let updated_at = updated_at_col
+                .as_ref()
+                .and_then(|col| col.get(idx).ok().and_then(any_value_to_string))
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+            records.push(FxRateRecordResponse {
+                from_currency: from_currency.to_string(),
+                to_currency: to_currency.to_string(),
+                date: date.to_string(),
+                rate,
+                source,
+                updated_at,
+            });
+        }
+    }
+
+    Ok(records)
+}
+
+fn load_fx_pair_with_polars(
+    app_handle: &tauri::AppHandle,
+    from_currency: &str,
+    to_currency: &str,
+    include_overrides: bool,
+) -> Result<Vec<FxRateRecordResponse>, String> {
+    let fx_rates_dir = get_fx_rates_dir(app_handle)?;
+    let safe_pair = format!("{}_{}", from_currency, to_currency);
+    let base_path = fx_rates_dir.join(format!("{}.csv", safe_pair));
+    let override_path = fx_rates_dir.join(format!("{}-override.csv", safe_pair));
+
+    let mut combined: HashMap<String, FxRateRecordResponse> = HashMap::new();
+
+    for record in read_fx_file_with_polars(&base_path)? {
+        insert_record_by_updated_at(&mut combined, record);
+    }
+
+    if include_overrides {
+        for record in read_fx_file_with_polars(&override_path)? {
+            insert_record_by_updated_at(&mut combined, record);
+        }
+    }
+
+    let mut merged: Vec<FxRateRecordResponse> = combined.into_values().collect();
+    merged.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(merged)
+}
+
+#[derive(Serialize, Clone)]
+struct PriceRecordResponse {
+    symbol: String,
+    date: String,
+    close: f64,
+    open: Option<f64>,
+    high: Option<f64>,
+    low: Option<f64>,
+    volume: Option<f64>,
+    source: String,
+    updated_at: String,
+}
+
+fn read_price_file_with_polars(path: &Path, symbol: &str) -> Result<Vec<PriceRecordResponse>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let df = CsvReader::from_path(path)
+        .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?
+        .has_header(true)
+        .with_ignore_errors(true)
+        .finish()
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+
+    if df.height() == 0 {
+        return Ok(Vec::new());
+    }
+
+    let date_col = df
+        .column("date")
+        .map_err(|e| format!("Missing 'date' column: {}", e))?
+        .clone();
+    let close_col = df
+        .column("close")
+        .map_err(|e| format!("Missing 'close' column: {}", e))?
+        .clone();
+    let open_col = df.column("open").ok().cloned();
+    let high_col = df.column("high").ok().cloned();
+    let low_col = df.column("low").ok().cloned();
+    let volume_col = df.column("volume").ok().cloned();
+    let source_col = df.column("source").ok().cloned();
+    let updated_at_col = df.column("updated_at").ok().cloned();
+
+    let mut records = Vec::with_capacity(df.height());
+    for idx in 0..df.height() {
+        let close = close_col.get(idx).ok().and_then(any_value_to_f64);
+        let date_value = date_col.get(idx).ok().and_then(any_value_to_string);
+
+        if let (Some(close), Some(date)) = (close, date_value) {
+            let open = open_col
+                .as_ref()
+                .and_then(|col| col.get(idx).ok().and_then(any_value_to_f64));
+            let high = high_col
+                .as_ref()
+                .and_then(|col| col.get(idx).ok().and_then(any_value_to_f64));
+            let low = low_col
+                .as_ref()
+                .and_then(|col| col.get(idx).ok().and_then(any_value_to_f64));
+            let volume = volume_col
+                .as_ref()
+                .and_then(|col| col.get(idx).ok().and_then(any_value_to_f64));
+            let source = source_col
+                .as_ref()
+                .and_then(|col| col.get(idx).ok().and_then(any_value_to_string))
+                .unwrap_or_else(|| "yahoo_finance".to_string());
+            let updated_at = updated_at_col
+                .as_ref()
+                .and_then(|col| col.get(idx).ok().and_then(any_value_to_string))
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+            records.push(PriceRecordResponse {
+                symbol: symbol.to_string(),
+                date: date.to_string(),
+                close,
+                open,
+                high,
+                low,
+                volume,
+                source,
+                updated_at,
+            });
+        }
+    }
+
+    Ok(records)
+}
+
+fn insert_price_record_by_updated_at(
+    map: &mut HashMap<String, PriceRecordResponse>,
+    record: PriceRecordResponse,
+) {
+    let new_ts = parse_updated_at_timestamp(&record.updated_at);
+    match map.entry(record.date.clone()) {
+        Entry::Vacant(entry) => {
+            entry.insert(record);
+        }
+        Entry::Occupied(mut entry) => {
+            let existing_ts = parse_updated_at_timestamp(&entry.get().updated_at);
+            if new_ts >= existing_ts {
+                entry.insert(record);
+            }
+        }
+    }
+}
+
+fn load_price_with_polars(
+    app_handle: &tauri::AppHandle,
+    symbol: &str,
+    include_overrides: bool,
+) -> Result<Vec<PriceRecordResponse>, String> {
+    let prices_dir = get_prices_dir(app_handle)?;
+    let safe_symbol = symbol.replace(':', "_");
+    let base_path = prices_dir.join(format!("{}.csv", safe_symbol));
+    let override_path = prices_dir.join(format!("{}-override.csv", safe_symbol));
+
+    let mut combined: HashMap<String, PriceRecordResponse> = HashMap::new();
+
+    for record in read_price_file_with_polars(&base_path, symbol)? {
+        insert_price_record_by_updated_at(&mut combined, record);
+    }
+
+    if include_overrides {
+        for record in read_price_file_with_polars(&override_path, symbol)? {
+            insert_price_record_by_updated_at(&mut combined, record);
+        }
+    }
+
+    let mut merged: Vec<PriceRecordResponse> = combined.into_values().collect();
+    merged.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(merged)
+}
+
+#[tauri::command]
+fn read_prices_polars(
+    app_handle: tauri::AppHandle,
+    symbol: String,
+    #[allow(non_snake_case)]
+    latestOnly: Option<bool>,
+    #[allow(non_snake_case)]
+    includeOverrides: Option<bool>,
+    limit: Option<usize>,
+) -> Result<Vec<PriceRecordResponse>, String> {
+    let include_overrides = includeOverrides.unwrap_or(true);
+    let mut records = load_price_with_polars(&app_handle, &symbol, include_overrides)?;
+
+    if records.is_empty() {
+        return Ok(records);
+    }
+
+    let latest_only = latestOnly.unwrap_or(false);
+    if latest_only && records.len() > 1 {
+        records.truncate(1);
+    } else if let Some(limit) = limit {
+        if limit < records.len() {
+            records.truncate(limit);
+        }
+    }
+
+    Ok(records)
+}
+
 fn build_price_csv_content(entries: &[PriceRecordEntry]) -> String {
     if entries.is_empty() {
         return format!("{}\n", PRICE_FILE_HEADER);
@@ -76,14 +397,18 @@ fn build_price_csv_content(entries: &[PriceRecordEntry]) -> String {
     let n_rows = entries.len();
 
     // Build columns
-    let dates: Vec<String> = entries.iter().map(|e| e.date.format("%Y-%m-%d").to_string()).collect();
+    let dates: Vec<String> = entries
+        .iter()
+        .map(|e| e.date.format("%Y-%m-%d").to_string())
+        .collect();
     let closes: Vec<f64> = entries.iter().map(|e| e.close).collect();
     let opens: Vec<Option<f64>> = entries.iter().map(|e| e.open).collect();
     let highs: Vec<Option<f64>> = entries.iter().map(|e| e.high).collect();
     let lows: Vec<Option<f64>> = entries.iter().map(|e| e.low).collect();
     let volumes: Vec<Option<f64>> = entries.iter().map(|e| e.volume).collect();
     let adjusted_closes: Vec<Option<f64>> = entries.iter().map(|e| e.adjusted_close).collect();
-    let split_unadjusted_closes: Vec<Option<f64>> = entries.iter().map(|e| e.split_unadjusted_close).collect();
+    let split_unadjusted_closes: Vec<Option<f64>> =
+        entries.iter().map(|e| e.split_unadjusted_close).collect();
     let sources: Vec<&str> = entries.iter().map(|e| e.source.as_str()).collect();
     let updated_ats: Vec<&str> = vec![updated_at.as_str(); n_rows];
 
@@ -99,14 +424,15 @@ fn build_price_csv_content(entries: &[PriceRecordEntry]) -> String {
         Series::new("split_unadjusted_close", split_unadjusted_closes),
         Series::new("source", sources),
         Series::new("updated_at", updated_ats),
-    ]).expect("Failed to create price DataFrame");
+    ])
+    .expect("Failed to create price DataFrame");
 
     // Write to CSV string
     let mut buf = Vec::new();
     CsvWriter::new(&mut buf)
         .finish(&mut df.clone())
         .expect("Failed to write CSV");
-    
+
     String::from_utf8(buf).unwrap_or_else(|_| format!("{}\n", PRICE_FILE_HEADER))
 }
 
@@ -310,10 +636,9 @@ fn yahoo_symbol_for(exchange: Option<&str>, base_symbol: &str) -> String {
         Some("STO") => format!("{}.ST", base_symbol),
         Some("KRX") | Some("KSE") => format!("{}.KS", base_symbol),
         Some("KOSDAQ") => format!("{}.KQ", base_symbol),
-        Some("NYSE") | Some("NASDAQ") | Some("NYSEARCA") | Some("NYSEAMERICAN") | Some("OTCMKTS") => {
-            base_symbol.to_string()
-        }
-        _ => base_symbol.to_string(),
+        Some("NYSE") | Some("NASDAQ") | Some("NYSEARCA") | Some("NYSEAMERICAN")
+        | Some("OTCMKTS") => base_symbol.replace('.', "-"),
+        _ => base_symbol.replace('.', "-"),
     }
 }
 
@@ -322,7 +647,14 @@ fn fetch_yahoo_chunk(
     canonical_symbol: &str,
     start: NaiveDate,
     end: NaiveDate,
-) -> Result<(Vec<PriceRecordEntry>, Vec<(NaiveDate, f64)>, Option<serde_json::Value>), String> {
+) -> Result<
+    (
+        Vec<PriceRecordEntry>,
+        Vec<(NaiveDate, f64)>,
+        Option<serde_json::Value>,
+    ),
+    String,
+> {
     let mut url = url::Url::parse(&format!(
         "https://query1.finance.yahoo.com/v8/finance/chart/{}",
         yahoo_symbol
@@ -352,7 +684,10 @@ fn fetch_yahoo_chunk(
         .append_pair("events", "div,splits")
         .append_pair("includeAdjustedClose", "true");
 
-    println!("[RUST] Fetching Yahoo data for {} from {} to {}", yahoo_symbol, start, end);
+    println!(
+        "[RUST] Fetching Yahoo data for {} from {} to {}",
+        yahoo_symbol, start, end
+    );
     println!("[RUST] URL: {}", url.as_str());
 
     let client = reqwest::blocking::Client::new();
@@ -361,31 +696,36 @@ fn fetch_yahoo_chunk(
         .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .send()
         .map_err(|e| format!("Yahoo request failed: {}", e))?;
-    
+
+    // Rate limiting: sleep for 100ms after each API call
+    std::thread::sleep(Duration::from_millis(100));
+
     let status = response.status();
     println!("[RUST] Yahoo response status: {}", status);
-    
+
     let text = response
         .text()
         .map_err(|e| format!("Failed to read Yahoo response: {}", e))?;
-    
+
     if text.is_empty() {
         eprintln!("[RUST] ✗ Empty response from Yahoo for {}", yahoo_symbol);
         return Err("Empty response from Yahoo Finance".to_string());
     }
-    
+
     if text.len() < 100 {
         eprintln!("[RUST] ⚠ Short response ({}bytes): {}", text.len(), &text);
     } else {
         println!("[RUST] Received {} bytes of data", text.len());
     }
 
-    let parsed: YahooChartResponse =
-        serde_json::from_str(&text).map_err(|e| {
-            eprintln!("[RUST] ✗ JSON parse error: {}", e);
-            eprintln!("[RUST] First 500 chars of response: {}", &text.chars().take(500).collect::<String>());
-            format!("Invalid Yahoo JSON: {}", e)
-        })?;
+    let parsed: YahooChartResponse = serde_json::from_str(&text).map_err(|e| {
+        eprintln!("[RUST] ✗ JSON parse error: {}", e);
+        eprintln!(
+            "[RUST] First 500 chars of response: {}",
+            &text.chars().take(500).collect::<String>()
+        );
+        format!("Invalid Yahoo JSON: {}", e)
+    })?;
 
     let result = parsed
         .chart
@@ -394,7 +734,7 @@ fn fetch_yahoo_chunk(
         .ok_or_else(|| "Yahoo response missing result".to_string())?;
 
     let timestamps = result.timestamp.unwrap_or_default();
-    
+
     // Extract splits to calculate split_unadjusted_close
     let splits_data = result
         .events
@@ -412,8 +752,10 @@ fn fetch_yahoo_chunk(
             splits
         })
         .unwrap_or_default();
-    
-    let indicators = result.indicators.ok_or_else(|| "Yahoo response missing indicators".to_string())?;
+
+    let indicators = result
+        .indicators
+        .ok_or_else(|| "Yahoo response missing indicators".to_string())?;
     let quote = indicators
         .quote
         .and_then(|mut q| q.pop())
@@ -445,7 +787,7 @@ fn fetch_yahoo_chunk(
                     .iter()
                     .filter(|(split_date, _)| *split_date > date)
                     .fold(*close, |price, (_, ratio)| price * ratio);
-                
+
                 records.push(PriceRecordEntry {
                     symbol: canonical_symbol.to_string(),
                     date,
@@ -462,7 +804,7 @@ fn fetch_yahoo_chunk(
         }
     }
 
-    // Extract dividends from events  
+    // Extract dividends from events
     let dividends: Vec<(NaiveDate, f64)> = result
         .events
         .as_ref()
@@ -515,7 +857,8 @@ fn ensure_history_for_symbol(
 
     // Fetch all data in one request instead of chunking
     let yahoo_symbol = yahoo_symbol_for(exchange.as_deref(), &base_symbol);
-    let (new_records, dividends, meta) = fetch_yahoo_chunk(&yahoo_symbol, symbol, earliest_date, today)?;
+    let (new_records, dividends, meta) =
+        fetch_yahoo_chunk(&yahoo_symbol, symbol, earliest_date, today)?;
 
     if let Some(meta_json) = meta {
         let metas_dir = get_yahoo_metas_dir(app_handle)?;
@@ -536,23 +879,23 @@ fn ensure_history_for_symbol(
                 entries.push(record.clone());
             }
         }
-        
+
         // Accumulate dividends
         all_dividends.extend(dividends);
 
         // Sort entries
         entries.sort_by(|a, b| b.date.cmp(&a.date));
     }
-        
+
     // Save dividend data if any
     if !all_dividends.is_empty() {
         all_dividends.sort_by_key(|d| std::cmp::Reverse(d.0)); // newest first
         all_dividends.dedup_by_key(|d| d.0); // remove duplicates
-        
+
         let mut dividend_csv = String::from(DIVIDEND_FILE_HEADER);
         dividend_csv.push('\n');
         let updated_at = Utc::now().to_rfc3339();
-        
+
         for (date, amount) in all_dividends {
             // Get currency from symbol or default to USD
             let currency = if symbol.contains(':') {
@@ -569,7 +912,7 @@ fn ensure_history_for_symbol(
                 updated_at
             ));
         }
-        
+
         // Write dividend file
         let dividends_dir = get_dividends_dir(app_handle)?;
         let safe_symbol = symbol.replace(':', "_");
@@ -865,14 +1208,93 @@ fn write_price_file(
 fn read_price_file(app_handle: tauri::AppHandle, symbol: String) -> Result<String, String> {
     let prices_dir = get_prices_dir(&app_handle)?;
     let safe_symbol = symbol.replace(':', "_");
-    let file_path = prices_dir.join(format!("{}.csv", safe_symbol));
+    let base_path = prices_dir.join(format!("{}.csv", safe_symbol));
+    let override_path = prices_dir.join(format!("{}-override.csv", safe_symbol));
 
-    if !file_path.exists() {
-        return Ok(String::new());
+    // Read base file
+    let base_content = if base_path.exists() {
+        read_to_string(&base_path)
+            .map_err(|e| format!("Failed to read price file for '{}': {}", symbol, e))?
+    } else {
+        String::new()
+    };
+
+    // Read override file
+    let override_content = if override_path.exists() {
+        read_to_string(&override_path)
+            .map_err(|e| format!("Failed to read price override file for '{}': {}", symbol, e))?
+    } else {
+        String::new()
+    };
+
+    // If no override data, just return base
+    if override_content.trim().is_empty() || override_content.lines().count() <= 1 {
+        return Ok(base_content);
     }
 
-    read_to_string(&file_path)
-        .map_err(|e| format!("Failed to read price file for '{}': {}", symbol, e))
+    // If no base data, just return override
+    if base_content.trim().is_empty() || base_content.lines().count() <= 1 {
+        return Ok(override_content);
+    }
+
+    // Merge: parse both files and combine by date, with override taking precedence
+    use std::collections::HashMap;
+    
+    let mut records: HashMap<String, String> = HashMap::new();
+    let header = "date,close,open,high,low,volume,source,updated_at";
+
+    // Parse base file (skip header) - convert old format to new format
+    for line in base_content.lines().skip(1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() >= 10 {
+            // Old format: date,close,open,high,low,volume,adjusted_close,split_unadjusted_close,source,updated_at
+            // New format: date,close,open,high,low,volume,source,updated_at
+            let date = fields[0];
+            let close = fields[1];
+            let open = fields[2];
+            let high = fields[3];
+            let low = fields[4];
+            let volume = fields[5];
+            let source = fields[8];
+            let updated_at = fields[9];
+            let new_line = format!("{},{},{},{},{},{},{},{}", date, close, open, high, low, volume, source, updated_at);
+            records.insert(date.to_string(), new_line);
+        } else if fields.len() >= 8 {
+            // Already in new format
+            if let Some(date) = fields.first() {
+                records.insert(date.to_string(), line.to_string());
+            }
+        }
+    }
+
+    // Parse override file and override base records (skip header)
+    for line in override_content.lines().skip(1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(date) = line.split(',').next() {
+            records.insert(date.to_string(), line.to_string());
+        }
+    }
+
+    // Sort by date descending
+    let mut sorted_dates: Vec<String> = records.keys().cloned().collect();
+    sorted_dates.sort_by(|a, b| b.cmp(a));
+
+    // Build output
+    let mut output = String::from(header);
+    output.push('\n');
+    for date in sorted_dates {
+        if let Some(line) = records.get(&date) {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    Ok(output)
 }
 
 #[tauri::command]
@@ -881,14 +1303,22 @@ fn read_price_file_head(
     symbol: String,
     lines: Option<usize>,
 ) -> Result<String, String> {
-    let prices_dir = get_prices_dir(&app_handle)?;
-    let safe_symbol = symbol.replace(':', "_");
-    let file_path = prices_dir.join(format!("{}.csv", safe_symbol));
-    if !file_path.exists() {
+    // Read full merged data and return first N lines
+    let full_content = read_price_file(app_handle, symbol)?;
+    if full_content.is_empty() {
         return Ok(String::new());
     }
+    
     let max_lines = lines.unwrap_or(8).max(1);
-    read_file_head(&file_path, max_lines)
+    let mut output = String::new();
+    for (idx, line) in full_content.lines().enumerate() {
+        if idx >= max_lines {
+            break;
+        }
+        output.push_str(line);
+        output.push('\n');
+    }
+    Ok(output)
 }
 
 #[tauri::command]
@@ -909,6 +1339,34 @@ fn list_price_files(app_handle: tauri::AppHandle) -> Result<Vec<String>, String>
 
     symbols.sort();
     Ok(symbols)
+}
+
+#[tauri::command]
+fn read_price_override_file(app_handle: tauri::AppHandle, symbol: String) -> Result<String, String> {
+    let prices_dir = get_prices_dir(&app_handle)?;
+    let safe_symbol = symbol.replace(':', "_");
+    let file_path = prices_dir.join(format!("{}-override.csv", safe_symbol));
+
+    if !file_path.exists() {
+        return Ok(String::new());
+    }
+
+    read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read price override file for '{}': {}", symbol, e))
+}
+
+#[tauri::command]
+fn write_price_override_file(
+    app_handle: tauri::AppHandle,
+    symbol: String,
+    content: String,
+) -> Result<(), String> {
+    let prices_dir = get_prices_dir(&app_handle)?;
+    let safe_symbol = symbol.replace(':', "_");
+    let file_path = prices_dir.join(format!("{}-override.csv", safe_symbol));
+
+    write(&file_path, content)
+        .map_err(|e| format!("Failed to write price override file for '{}': {}", symbol, e))
 }
 
 #[tauri::command]
@@ -1030,6 +1488,20 @@ fn write_fx_rate_file(
 }
 
 #[tauri::command]
+fn write_fx_rate_override_file(
+    app_handle: tauri::AppHandle,
+    pair: String,
+    content: String,
+) -> Result<(), String> {
+    let fx_rates_dir = get_fx_rates_dir(&app_handle)?;
+    let safe_pair = pair.replace('/', "_");
+    let file_path = fx_rates_dir.join(format!("{}-override.csv", safe_pair));
+
+    write(&file_path, content)
+        .map_err(|e| format!("Failed to write FX rate override file for '{}': {}", pair, e))
+}
+
+#[tauri::command]
 fn read_fx_rate_file(app_handle: tauri::AppHandle, pair: String) -> Result<String, String> {
     let fx_rates_dir = get_fx_rates_dir(&app_handle)?;
     let safe_pair = pair.replace('/', "_");
@@ -1085,15 +1557,12 @@ fn sync_history_once(app_handle: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn download_symbol_history(
-    app_handle: tauri::AppHandle,
-    symbol: String,
-) -> Result<(), String> {
+fn download_symbol_history(app_handle: tauri::AppHandle, symbol: String) -> Result<(), String> {
     println!("[RUST] Received download request for: {}", symbol);
-    
+
     let fifteen_years_ago = Utc::now().date_naive() - ChronoDuration::days(15 * 365);
     let mut price_map: HashMap<String, Vec<PriceRecordEntry>> = HashMap::new();
-    
+
     println!("[RUST] Calling ensure_history_for_symbol for: {}", symbol);
     // Use the existing ensure_history_for_symbol logic
     match ensure_history_for_symbol(&app_handle, &mut price_map, &symbol, fifteen_years_ago) {
@@ -1103,17 +1572,21 @@ fn download_symbol_history(
             return Err(e);
         }
     }
-    
+
     // Write the price file
     if let Some(entries) = price_map.get(&symbol) {
-        println!("[RUST] Writing {} price entries for: {}", entries.len(), symbol);
+        println!(
+            "[RUST] Writing {} price entries for: {}",
+            entries.len(),
+            symbol
+        );
         let csv_content = build_price_csv_content(entries);
         persist_price_file_content(&app_handle, &symbol, &csv_content)?;
         println!("[RUST] ✓ Successfully wrote price file for: {}", symbol);
     } else {
         eprintln!("[RUST] ⚠ No price data found for: {}", symbol);
     }
-    
+
     Ok(())
 }
 
@@ -2078,7 +2551,7 @@ fn get_all_daily_prices(app_handle: tauri::AppHandle) -> Result<Vec<DailyPriceDa
 
             if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                 let symbol = filename.trim_end_matches(".csv").replace('_', ":");
-                
+
                 // Read only first 3 lines (header + latest 2 prices)
                 // Price files are sorted by date descending, so top 2 data rows are what we need
                 if let Ok(content) = read_file_head(&path, 3) {
@@ -2107,10 +2580,14 @@ fn get_all_daily_prices(app_handle: tauri::AppHandle) -> Result<Vec<DailyPriceDa
                                 let prev_fields: Vec<&str> = prev_str.split(',').collect();
                                 if prev_fields.len() >= 2 {
                                     if let (Ok(prev_date), Ok(prev_close_val)) = (
-                                        NaiveDate::parse_from_str(prev_fields[0].trim(), "%Y-%m-%d"),
+                                        NaiveDate::parse_from_str(
+                                            prev_fields[0].trim(),
+                                            "%Y-%m-%d",
+                                        ),
                                         prev_fields[1].trim().parse::<f64>(),
                                     ) {
-                                        previous_date = Some(prev_date.format("%Y-%m-%d").to_string());
+                                        previous_date =
+                                            Some(prev_date.format("%Y-%m-%d").to_string());
                                         previous_close = Some(prev_close_val);
                                     }
                                 }
@@ -2147,7 +2624,7 @@ fn get_all_daily_fx_rates(app_handle: tauri::AppHandle) -> Result<Vec<DailyFxRat
 
             if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
                 let pair = filename.trim_end_matches(".csv").replace('_', "/");
-                
+
                 // Read only first 3 lines (header + latest 2 rates)
                 // FX rate files are sorted by date descending
                 if let Ok(content) = read_file_head(&path, 3) {
@@ -2178,10 +2655,14 @@ fn get_all_daily_fx_rates(app_handle: tauri::AppHandle) -> Result<Vec<DailyFxRat
                                 let prev_fields: Vec<&str> = prev_str.split(',').collect();
                                 if prev_fields.len() >= 4 {
                                     if let (Ok(prev_date), Ok(prev_rate_val)) = (
-                                        NaiveDate::parse_from_str(prev_fields[2].trim(), "%Y-%m-%d"),
+                                        NaiveDate::parse_from_str(
+                                            prev_fields[2].trim(),
+                                            "%Y-%m-%d",
+                                        ),
                                         prev_fields[3].trim().parse::<f64>(),
                                     ) {
-                                        previous_date = Some(prev_date.format("%Y-%m-%d").to_string());
+                                        previous_date =
+                                            Some(prev_date.format("%Y-%m-%d").to_string());
                                         previous_rate = Some(prev_rate_val);
                                     }
                                 }
@@ -2202,6 +2683,39 @@ fn get_all_daily_fx_rates(app_handle: tauri::AppHandle) -> Result<Vec<DailyFxRat
     }
 
     Ok(daily_rates)
+}
+
+#[tauri::command]
+fn read_fx_rates_polars(
+    app_handle: tauri::AppHandle,
+    #[allow(non_snake_case)]
+    fromCurrency: String,
+    #[allow(non_snake_case)]
+    toCurrency: String,
+    #[allow(non_snake_case)]
+    latestOnly: Option<bool>,
+    #[allow(non_snake_case)]
+    includeOverrides: Option<bool>,
+    limit: Option<usize>,
+) -> Result<Vec<FxRateRecordResponse>, String> {
+    let include_overrides = includeOverrides.unwrap_or(true);
+    let mut records =
+        load_fx_pair_with_polars(&app_handle, &fromCurrency, &toCurrency, include_overrides)?;
+
+    if records.is_empty() {
+        return Ok(records);
+    }
+
+    let latest_only = latestOnly.unwrap_or(true);
+    if latest_only && records.len() > 1 {
+        records.truncate(1);
+    } else if let Some(limit) = limit {
+        if limit < records.len() {
+            records.truncate(limit);
+        }
+    }
+
+    Ok(records)
 }
 
 #[tauri::command]
@@ -2256,7 +2770,10 @@ fn main() {
             write_price_file,
             read_price_file,
             read_price_file_head,
+            read_prices_polars,
             list_price_files,
+            read_price_override_file,
+            write_price_override_file,
             get_all_daily_prices,
             write_split_file,
             read_split_file,
@@ -2265,8 +2782,10 @@ fn main() {
             read_dividend_file,
             list_dividend_files,
             write_fx_rate_file,
+            write_fx_rate_override_file,
             read_fx_rate_file,
             read_fx_rate_file_head,
+            read_fx_rates_polars,
             list_fx_rate_files,
             get_all_daily_fx_rates,
             sync_history_once,

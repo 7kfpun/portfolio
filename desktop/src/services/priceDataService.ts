@@ -49,28 +49,20 @@ export class PriceDataService {
 
   private async readSymbolPrices(
     symbol: string,
-    options?: { latestOnly?: boolean }
+    options?: { latestOnly?: boolean; includeOverrides?: boolean }
   ): Promise<PriceRecord[]> {
-    const useLatest = options?.latestOnly !== false;
-    if (useLatest) {
-      try {
-        const content = await invoke<string>('read_price_file_head', {
-          symbol,
-          lines: 8,
-        });
-        if (content && content.trim()) {
-          return this.parsePriceFile(symbol, content);
-        }
-      } catch (error) {
-        console.warn(`Failed to read price head for ${symbol}:`, error);
-      }
-    }
+    const latestOnly = options?.latestOnly !== false;
+    const includeOverrides = options?.includeOverrides !== false;
 
     try {
-      const content = await invoke<string>('read_price_file', { symbol });
-      return this.parsePriceFile(symbol, content);
+      return await invoke<PriceRecord[]>('read_prices_polars', {
+        symbol,
+        latestOnly,
+        includeOverrides,
+        limit: latestOnly ? 8 : undefined,
+      });
     } catch (error) {
-      console.error(`Failed to read price file for ${symbol}:`, error);
+      console.error(`Failed to read prices for ${symbol}:`, error);
       return [];
     }
   } private buildFileContent(records: PriceRecord[]): string {
@@ -256,6 +248,96 @@ export class PriceDataService {
     } catch (error) {
       console.error('Failed to get daily FX rates:', error);
       return new Map();
+    }
+  }
+
+  async saveOverridePricesForSymbol(
+    symbol: string,
+    overridePrices: PriceRecord[]
+  ): Promise<void> {
+    // Read existing overrides
+    const existingContent = await invoke<string>('read_price_override_file', { symbol }).catch(() => '');
+    const existingRecords = this.parsePriceFile(symbol, existingContent);
+
+    // Create a map of existing records by date
+    const recordMap = new Map<string, PriceRecord>();
+    for (const record of existingRecords) {
+      recordMap.set(record.date, record);
+    }
+
+    // Add/update with new records
+    const sanitized = overridePrices
+      .filter(record => record.date && !Number.isNaN(record.close))
+      .map(record => ({
+        ...record,
+        symbol,
+        source: 'manual' as const,
+        updated_at: new Date().toISOString(),
+      }));
+
+    for (const record of sanitized) {
+      recordMap.set(record.date, record);
+    }
+
+    const allRecords = Array.from(recordMap.values());
+
+    if (!allRecords.length) {
+      try {
+        await invoke('write_price_override_file', {
+          symbol,
+          content: PRICE_FILE_HEADER + '\n',
+        });
+      } catch (error) {
+        console.warn('Failed to clear price override file', error);
+      }
+      return;
+    }
+
+    const csvLines = [PRICE_FILE_HEADER];
+    for (const price of allRecords) {
+      csvLines.push(
+        `${price.date},${price.close},${price.open ?? ''},${price.high ?? ''},${price.low ?? ''},${price.volume ?? ''},${price.source},${price.updated_at}`
+      );
+    }
+
+    await invoke('write_price_override_file', {
+      symbol,
+      content: csvLines.join('\n') + '\n',
+    });
+  }
+
+  async removeOverridePrice(symbol: string, date: string): Promise<void> {
+    try {
+      const content = await invoke<string>('read_price_override_file', { symbol });
+      const existingRecords = this.parsePriceFile(symbol, content);
+      const filteredRecords = existingRecords.filter(record => record.date !== date);
+
+      if (filteredRecords.length === 0) {
+        try {
+          await invoke('write_price_override_file', {
+            symbol,
+            content: PRICE_FILE_HEADER + '\n',
+          });
+        } catch (error) {
+          console.warn('Failed to clear price override file', error);
+        }
+        return;
+      }
+
+      const csvLines = [PRICE_FILE_HEADER];
+      for (const price of filteredRecords) {
+        csvLines.push(
+          `${price.date},${price.close},${price.open ?? ''},${price.high ?? ''},${price.low ?? ''},${price.volume ?? ''},${price.source},${price.updated_at}`
+        );
+      }
+
+      await invoke('write_price_override_file', {
+        symbol,
+        content: csvLines.join('\n') + '\n',
+      });
+    } catch (error) {
+      console.error('Failed to remove price override:', error);
+      throw error;
     }
   }
 }

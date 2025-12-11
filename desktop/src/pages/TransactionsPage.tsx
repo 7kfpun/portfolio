@@ -5,7 +5,7 @@ import { useTransactionsStore } from '../store/transactionsStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { calculateTransactionStats } from '../utils/transactionStats';
 import { Transaction } from '../types/Transaction';
-import { Container, Header, HeaderRow, HeaderLeft, HeaderRight, Meta, Title, Description, Card, LoadingText, ErrorText, PageHeaderControls } from '../components/PageLayout';
+import { Container, PageHeader, Card, LoadingText, ErrorText } from '../components/PageLayout';
 import { TanStackTable } from '../components/TanStackTable';
 import { MetricCard } from '../components/MetricCard';
 import { Search } from 'lucide-react';
@@ -301,18 +301,11 @@ export function TransactionsPage() {
 
   return (
     <Container>
-      <Header>
-        <HeaderRow>
-          <HeaderLeft>
-            <Meta>Portfolio Manager</Meta>
-            <Title>All Transactions</Title>
-            <Description>View and manage your investment transactions</Description>
-          </HeaderLeft>
-          <HeaderRight>
-            <PageHeaderControls />
-          </HeaderRight>
-        </HeaderRow>
-      </Header>
+      <PageHeader
+        meta="Portfolio Manager"
+        title="All Transactions"
+        description="View and manage your investment transactions"
+      />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem', marginBottom: '1.25rem' }}>
         <MetricCard title="Transactions" metrics={transactionMetrics} />

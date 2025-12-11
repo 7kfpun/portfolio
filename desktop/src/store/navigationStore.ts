@@ -3,7 +3,7 @@ import { create } from 'zustand';
 export type PageType = 'dashboard' | 'report' | 'transactions' | 'settings' | 'stock-detail'
   | 'settings-keys' | 'settings-data-readiness' | 'settings-currency-data' | 'settings-navs';
 
-export type ReportSubPage = 'positions' | 'heatmaps';
+export type ReportSubPage = 'positions' | 'heatmaps' | 'dividends';
 
 interface NavigationState {
   currentPage: PageType;

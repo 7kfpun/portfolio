@@ -4,7 +4,7 @@ import { usePortfolioStore } from '../store/portfolioStore';
 import { useTransactionsStore } from '../store/transactionsStore';
 import { priceDataService } from '../services/priceDataService';
 import { TrendingUp, TrendingDown, DollarSign, Calendar } from 'lucide-react';
-import { Container, Header, HeaderRow, HeaderLeft, HeaderRight, Meta, Title, Description, Card, LoadingText, PageHeaderControls } from '../components/PageLayout';
+import { Container, PageHeader, Card, LoadingText } from '../components/PageLayout';
 import { Stats, StatCardComponent } from '../components/StatsCards';
 import { Position } from '../types/Portfolio';
 import { PriceRecord } from '../types/PriceData';
@@ -358,6 +358,50 @@ export function HeatmapsPage() {
     return { totalValue, totalGain, totalGainPercent, gainers, losers, neutral, totalDailyGain, totalDailyGainPercent };
   }, [positions, stocksByCurrency]);
 
+  const dividendAnalysis = useMemo(() => {
+    const dividendTransactions = transactions.filter(t => {
+      const type = t.type.toLowerCase();
+      return type === 'dividend' || type === 'div';
+    });
+
+    interface YearMonth {
+      year: number;
+      month: number;
+      total: number;
+      count: number;
+      stocks: Set<string>;
+    }
+
+    const byYearMonth = new Map<string, YearMonth>();
+    const byYear = new Map<number, { total: number; count: number; stocks: Set<string> }>();
+
+    dividendTransactions.forEach(txn => {
+      const date = new Date(txn.date);
+      const year = date.getFullYear();
+      const month = date.getMonth() + 1;
+      const key = `${year}-${String(month).padStart(2, '0')}`;
+      const amount = parseFloat(txn.quantity) * parseFloat(txn.price);
+
+      if (!byYearMonth.has(key)) {
+        byYearMonth.set(key, { year, month, total: 0, count: 0, stocks: new Set() });
+      }
+      const monthData = byYearMonth.get(key)!;
+      monthData.total += amount;
+      monthData.count += 1;
+      monthData.stocks.add(txn.stock);
+
+      if (!byYear.has(year)) {
+        byYear.set(year, { total: 0, count: 0, stocks: new Set() });
+      }
+      const yearData = byYear.get(year)!;
+      yearData.total += amount;
+      yearData.count += 1;
+      yearData.stocks.add(txn.stock);
+    });
+
+    return { byYearMonth, byYear };
+  }, [transactions]);
+
   if (loadingTransactions || loading) {
     return (
       <Container>
@@ -370,20 +414,11 @@ export function HeatmapsPage() {
 
   return (
     <Container>
-      <Header>
-        <HeaderRow>
-          <HeaderLeft>
-            <Meta>Portfolio Visualization</Meta>
-            <Title>Heatmap</Title>
-            <Description>
-              Visual representation of your holdings performance
-            </Description>
-          </HeaderLeft>
-          <HeaderRight>
-            <PageHeaderControls />
-          </HeaderRight>
-        </HeaderRow>
-      </Header>
+      <PageHeader
+        meta="Portfolio Visualization"
+        title="Heatmap"
+        description="Visual representation of your holdings performance"
+      />
 
       <Stats>
         <StatCardComponent
@@ -492,6 +527,71 @@ export function HeatmapsPage() {
             Cell size represents portfolio weight
           </div>
         </Legend>
+      </Card>
+
+      <Card>
+        <CurrencyTitle $color="#667eea" style={{ marginTop: 0 }}>
+          Dividend Analysis
+        </CurrencyTitle>
+
+        {dividendAnalysis.byYear.size === 0 ? (
+          <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
+            No dividend transactions found.
+          </div>
+        ) : (
+          <>
+            {Array.from(dividendAnalysis.byYear.entries())
+              .sort(([yearA], [yearB]) => yearB - yearA)
+              .map(([year, yearData]) => {
+                const monthsInYear = Array.from(dividendAnalysis.byYearMonth.entries())
+                  .filter(([key]) => key.startsWith(String(year)))
+                  .sort(([keyA], [keyB]) => keyB.localeCompare(keyA));
+
+                return (
+                  <CurrencySection key={year}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600, color: '#1e293b' }}>
+                        {year}
+                      </h4>
+                      <div style={{ display: 'flex', gap: '1rem', fontSize: '0.875rem', color: '#64748b' }}>
+                        <span>Total: <strong style={{ color: '#16a34a' }}>${yearData.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+                        <span>Payments: <strong>{yearData.count}</strong></span>
+                        <span>Stocks: <strong>{yearData.stocks.size}</strong></span>
+                      </div>
+                    </div>
+
+                    <TableContainer>
+                      <Table>
+                        <thead>
+                          <tr>
+                            <Th>Month</Th>
+                            <Th style={{ textAlign: 'right' }}>Amount</Th>
+                            <Th style={{ textAlign: 'right' }}>Payments</Th>
+                            <Th style={{ textAlign: 'right' }}>Stocks</Th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {monthsInYear.map(([key, monthData]) => {
+                            const monthName = new Date(monthData.year, monthData.month - 1).toLocaleDateString('en-US', { month: 'long' });
+                            return (
+                              <tr key={key}>
+                                <Td>{monthName}</Td>
+                                <Td style={{ textAlign: 'right', fontWeight: 600, color: '#16a34a' }}>
+                                  ${monthData.total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </Td>
+                                <Td style={{ textAlign: 'right' }}>{monthData.count}</Td>
+                                <Td style={{ textAlign: 'right' }}>{monthData.stocks.size}</Td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </Table>
+                    </TableContainer>
+                  </CurrencySection>
+                );
+              })}
+          </>
+        )}
       </Card>
     </Container>
   );

@@ -1,0 +1,161 @@
+# Portfolio Manager - Frontend AI Rules
+
+## Project Overview
+Multi-platform portfolio management application with React/TypeScript frontend and Rust/Tauri backend. Clean Architecture with privacy-first CSV storage.
+
+## Tech Stack
+- React 18 + TypeScript + Vite
+- Zustand for state management (NO Redux)
+- styled-components for styling (NO Tailwind CSS)
+- lightweight-charts v5 for financial charts
+- TanStack Table for data tables
+- PapaParse for CSV processing
+
+## Architecture Layers
+- **Presentation**: components/, pages/ (UI components)
+- **Application**: store/ (Zustand stores)
+- **Domain**: types/, utils/ (business logic)
+- **Infrastructure**: services/ (external communication)
+
+## Component Guidelines
+
+### ALWAYS use these patterns:
+
+**Charts (lightweight-charts v5)**:
+```typescript
+import { createChart, AreaSeries, LineSeries } from 'lightweight-charts';
+
+const chart = createChart(container, options);
+const areaSeries = chart.addSeries(AreaSeries, { /* options */ });
+const lineSeries = chart.addSeries(LineSeries, { /* options */ });
+```
+
+**Tables (TanStack Table)**:
+```typescript
+import { AdvancedTable, Column } from '../components/AdvancedTable';
+
+const columns: Column<DataType>[] = [
+  {
+    key: 'field',
+    header: 'Header',
+    accessor: (row) => row.field,
+    sortable: true,
+    align: 'left',
+  },
+];
+
+<AdvancedTable data={data} columns={columns} />
+```
+
+**State Management (Zustand)**:
+```typescript
+interface StoreState {
+  data: Type | null;
+  loading: boolean;
+  error: string | null;
+  loadData: () => Promise<void>;
+}
+
+export const useStore = create<StoreState>((set) => ({
+  data: null,
+  loading: false,
+  error: null,
+  loadData: async () => {
+    set({ loading: true, error: null });
+    try {
+      const data = await service.loadData();
+      set({ data, loading: false });
+    } catch (err) {
+      set({ error: err.message, loading: false });
+    }
+  },
+}));
+```
+
+### NEVER do these:
+- ❌ Create custom `<table>` elements (use AdvancedTable)
+- ❌ Use Tailwind CSS classes (use styled-components)
+- ❌ Use Redux (use Zustand)
+- ❌ Use lightweight-charts v4 API (use v5 addSeries API)
+- ❌ Import from wrong architecture layer
+
+## File Naming Conventions
+- Components: PascalCase (PortfolioPage.tsx)
+- Services: camelCase (transactionService.ts)
+- Stores: camelCase + Store (portfolioStore.ts)
+- Types: PascalCase (Transaction.ts)
+- Utils: camelCase (csvUtils.ts)
+
+## Component Structure
+```typescript
+// 1. Imports (React, styled-components, types, stores)
+import { useState } from 'react';
+import styled from 'styled-components';
+import { Transaction } from '../types/Transaction';
+import { usePortfolioStore } from '../store/portfolioStore';
+
+// 2. Styled components
+const Container = styled.div`
+  padding: 2rem;
+  border-radius: 12px;
+`;
+
+// 3. Component
+export function PortfolioPage() {
+  // Stores first
+  const { positions, loading } = usePortfolioStore();
+
+  // Local state
+  const [filter, setFilter] = useState('');
+
+  // Handlers
+  const handleFilter = (value: string) => setFilter(value);
+
+  // Effects (if needed)
+  // useEffect(() => { ... }, []);
+
+  // Render
+  return (
+    <Container>
+      {/* JSX */}
+    </Container>
+  );
+}
+```
+
+## Styling Rules
+- Use styled-components exclusively
+- Follow existing color palette (USD blue, TWD red, etc.)
+- Use CSS custom properties for consistent theming
+- Prefer flexbox/grid over absolute positioning
+
+## State Management Rules
+- One store per major domain (portfolio, transactions, settings)
+- Async actions should set loading/error states
+- Use selectors for computed values
+- Keep stores focused on single responsibility
+
+## Error Handling
+- Use try/catch in async functions
+- Set error state in stores
+- Display user-friendly error messages
+- Log technical details to console
+
+## Testing
+- Write tests for utils, services, and stores
+- Use Vitest framework
+- Mock external dependencies (Tauri invoke)
+- Test both success and error cases
+
+## Performance
+- Memoize expensive calculations
+- Use React.memo for components
+- Lazy load heavy components
+- Cache API responses appropriately
+
+## Code Quality
+- TypeScript strict mode enabled
+- No any types (use proper interfaces)
+- Consistent import ordering
+- Clear variable/function names
+- Add JSDoc for complex functions
